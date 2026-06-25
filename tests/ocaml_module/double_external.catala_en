@@ -1,0 +1,6 @@
+> Module Double_external external
+
+```catala-metadata
+declaration double content integer
+  depends on x content integer
+```

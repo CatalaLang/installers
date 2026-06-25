@@ -1,0 +1,12 @@
+# Règles générales — prologue
+
+Ce fichier contient des caractères non-ASCII : é, è, ê, ë, à, â, ç, ù, û, ü, ï, î, ô, œ.
+Symbole euro : 100 €. Ligature : cœur.
+Caractères moins courants : Ü, Ñ, Â, Ø, å.
+
+## Première section
+
+```catala
+champ d'application Test :
+  définition montant égal à 42
+```

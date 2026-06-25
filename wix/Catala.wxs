@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WiX v5 authoring for the Catala Windows MSI.
+
+  Build (on a Windows machine with the WiX dotnet tool installed):
+
+    wix build wix\Catala.wxs `
+      -ext WixToolset.Util.wixext `
+      -ext WixToolset.UI.wixext `
+      -d Version=0.11.0 `
+      -d StageDir=_bundle\stage\catala-0.11.0-windows-x86_64 `
+      -arch x64 `
+      -o _bundle\catala-0.11.0-windows-x86_64.msi
+
+  Two preprocessor variables are required:
+    Version   - 3- or 4-part numeric MSI ProductVersion (e.g. 0.11.0)
+    StageDir  - the staging tree assembled by build-bundle.ps1; its contents
+                (bin\ and toolchain\) are harvested into the install folder.
+
+  Design choices (see DESIGN.md):
+    - perUser scope: installs to %LOCALAPPDATA%\Programs\Catala with NO admin /
+      no UAC. IT can push per-machine by building with -d Scope=perMachine and
+      running elevated (msiexec ALLUSERS=1 /qn); a follow-up variant.
+    - PATH: the install's bin\ is added to the *user* PATH (HKCU).
+    - Defender exclusions are an opt-in, self-elevating extra (TUNE_DEFENDER=1),
+      never required for install to succeed. See defender.ps1.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!-- The opt-in Defender custom action can be compiled out (-d Defender=0) to
+       validate the core MSI independently of the Util extension CA binary. -->
+  <?ifndef Defender ?>
+  <?define Defender = "1" ?>
+  <?endif?>
+
+  <!-- Install scope. Default perMachine (C:\ProgramData\Catala, elevated, system
+       PATH/HKLM) — the shipped variant. Build with -d Scope=perUser for a no-admin
+       per-user install (%LOCALAPPDATA%, user PATH/HKCU). ProgramData (not Program
+       Files) keeps the path space-free for clerk's not-yet-space-hardened rules. -->
+  <?ifndef Scope ?>
+  <?define Scope = "perMachine" ?>
+  <?endif?>
+  <?if $(var.Scope) = "perMachine" ?>
+  <?define RegRoot = "HKLM" ?>
+  <?define EnvSystem = "yes" ?>
+  <?else?>
+  <?define RegRoot = "HKCU" ?>
+  <?define EnvSystem = "no" ?>
+  <?endif?>
+
+  <Package
+      Name="Catala"
+      Manufacturer="Inria"
+      Version="$(var.Version)"
+      Scope="$(var.Scope)"
+      UpgradeCode="6f2a1c5e-3d4b-4a7e-9b1f-2c8d5e6a7b90"
+      Compressed="yes"
+      InstallerVersion="500">
+
+    <!-- Block downgrades; allow same-version repair and newer-version upgrade. -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Catala is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://catala-lang.org" />
+
+    <?if $(var.Scope) = "perMachine" ?>
+    <!-- C:\ProgramData\Catala (per-machine, elevated). A SPACE-FREE root is
+         required: clerk's generated ninja passes some paths (e.g. -I <libdir>)
+         unquoted, so an install under "C:\Program Files" breaks the OCaml
+         backend. CommonAppDataFolder (C:\ProgramData) is the space-free
+         machine-wide standard location WiX can auto-GUID. -->
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="Catala" />
+    </StandardDirectory>
+    <?else?>
+    <!-- %LOCALAPPDATA%\Programs\Catala (per-user, no admin). -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Catala" />
+      </Directory>
+    </StandardDirectory>
+    <?endif?>
+
+    <Feature Id="Main" Title="Catala toolchain" Level="1">
+      <ComponentGroupRef Id="ToolchainFiles" />
+      <ComponentRef Id="EnvPath" />
+      <?if $(var.Defender) = "1" ?>
+      <ComponentRef Id="DefenderMarker" />
+      <?endif?>
+    </Feature>
+
+    <!--
+      Harvest the whole staging tree. The WiX v4/v5 <Files> element globs the
+      directory and auto-generates one component per file, mirroring the
+      subdirectory structure (bin\, toolchain\...) under INSTALLFOLDER.
+    -->
+    <ComponentGroup Id="ToolchainFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.StageDir)\**" />
+    </ComponentGroup>
+
+    <!-- Add bin\ to PATH (user/HKCU for perUser, system/HKLM for perMachine).
+         The registry value is the component keypath. -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="EnvPath" Guid="b3d9a2f1-7c44-4e2a-8f6b-1d0c3e5a4b21">
+        <RegistryValue Root="$(var.RegRoot)" Key="Software\Catala"
+                       Name="InstallDir" Type="string" Value="[INSTALLFOLDER]"
+                       KeyPath="yes" />
+        <Environment Id="PATH" Name="PATH" Value="[INSTALLFOLDER]bin"
+                     Part="last" Action="set" Permanent="no" System="$(var.EnvSystem)" />
+      </Component>
+
+      <?if $(var.Defender) = "1" ?>
+      <!--
+        Marker written only when the user opted into Defender exclusions.
+        Its presence drives the uninstall-time removal (so we don't pop a UAC
+        prompt on uninstall for users who never added exclusions).
+      -->
+      <Component Id="DefenderMarker" Guid="c4e0b3a2-8d55-4f3b-9a7c-2e1d4f6b5c32"
+                 Condition="TUNE_DEFENDER=&quot;1&quot;">
+        <RegistryValue Root="$(var.RegRoot)" Key="Software\Catala"
+                       Name="DefenderExclusions" Type="integer" Value="1"
+                       KeyPath="yes" />
+      </Component>
+      <?endif?>
+    </DirectoryRef>
+
+    <?if $(var.Defender) = "1" ?>
+    <!-- =====================================================================
+         Defender exclusions (opt-in, self-elevating, non-fatal)
+         ===================================================================== -->
+
+    <!-- Opt in with TUNE_DEFENDER=1 on the command line (or a UI checkbox,
+         TODO). Public property so it survives the deferred sequence. -->
+    <Property Id="TUNE_DEFENDER" Value="0" Secure="yes" />
+
+    <!-- On uninstall, only remove exclusions if the marker was set at install. -->
+    <Property Id="DEFENDER_WAS_TUNED">
+      <RegistrySearch Id="DefenderMarkerSearch" Root="$(var.RegRoot)"
+                      Key="Software\Catala" Name="DefenderExclusions"
+                      Type="raw" />
+    </Property>
+
+    <!-- Deferred CAs that run the script; they read their command line from the
+         CustomActionData, i.e. the property whose name equals the CA id.
+         Impersonate=yes -> runs as the (possibly non-elevated) user, and
+         defender.ps1 self-elevates via UAC. Return=ignore -> non-fatal.
+         NOTE: confirm the Util CA BinaryRef id matches the installed extension
+         (e.g. Wix4UtilCA_X64) on first build. -->
+    <CustomAction Id="TuneDefenderAdd" BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec64" Execute="deferred"
+                  Impersonate="yes" Return="ignore" />
+    <CustomAction Id="TuneDefenderRemove" BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec64" Execute="deferred"
+                  Impersonate="yes" Return="ignore" />
+
+    <!-- Immediate type-51 actions that marshal each command line into the
+         matching deferred CA's CustomActionData. Distinct ids from the deferred
+         CAs; Property= names the deferred CA. [INSTALLFOLDER]/[System64Folder]
+         are resolved by the time these run (after CostFinalize). -->
+    <CustomAction Id="SetTuneDefenderAdd" Property="TuneDefenderAdd"
+                  Execute="immediate"
+                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]toolchain\libexec\defender.ps1&quot; -Add -SelfElevate -InstallDir &quot;[INSTALLFOLDER]&quot;" />
+    <CustomAction Id="SetTuneDefenderRemove" Property="TuneDefenderRemove"
+                  Execute="immediate"
+                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]toolchain\libexec\defender.ps1&quot; -Remove -SelfElevate -Quiet -InstallDir &quot;[INSTALLFOLDER]&quot;" />
+
+    <InstallExecuteSequence>
+      <!-- Add after files are on disk (defender.ps1 must exist), on fresh
+           install / change when opted in. -->
+      <Custom Action="SetTuneDefenderAdd" After="InstallFiles"
+              Condition="TUNE_DEFENDER=&quot;1&quot; AND NOT Installed" />
+      <Custom Action="TuneDefenderAdd" After="SetTuneDefenderAdd"
+              Condition="TUNE_DEFENDER=&quot;1&quot; AND NOT Installed" />
+      <!-- Remove on uninstall, only if exclusions were previously added.
+           Runs before files are gone so defender.ps1 still exists. -->
+      <Custom Action="SetTuneDefenderRemove" Before="RemoveFiles"
+              Condition="REMOVE=&quot;ALL&quot; AND DEFENDER_WAS_TUNED" />
+      <Custom Action="TuneDefenderRemove" After="SetTuneDefenderRemove"
+              Condition="REMOVE=&quot;ALL&quot; AND DEFENDER_WAS_TUNED" />
+    </InstallExecuteSequence>
+    <?endif?>
+
+    <!-- Minimal click-through UI; install dir is fixed (per-user). A custom
+         dialog with a "tune Defender" checkbox is a follow-up; for now the
+         option is command-line driven (TUNE_DEFENDER=1). -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)license.rtf" />
+
+  </Package>
+</Wix>

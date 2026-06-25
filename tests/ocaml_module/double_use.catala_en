@@ -1,0 +1,17 @@
+> Using Double_external as Ext
+
+```catala
+#[test]
+declaration scope UseDouble:
+  output result content integer
+
+scope UseDouble:
+  definition result equals Ext.double of 21
+```
+
+```catala-test-cli
+$ catala test-scope UseDouble
+┌─[RESULT]─ UseDouble ─
+│ result = 42
+└─
+```
