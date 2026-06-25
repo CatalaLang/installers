@@ -117,6 +117,40 @@ if (-not (Test-Path "$opamPrefix\bin\catala-format.exe") -and -not (Test-Path "$
 ok "catala-format"
 
 ###############################################################################
+# Inputs report -- make explicit what this build harvests. The bundle is
+# assembled from one opam switch; this prints each source package's version and
+# provenance (opam pin source, plus the git SHA when the pin is a local
+# checkout), and the pinned winlibs gcc. Informational only -- never fatal.
+###############################################################################
+info "Build inputs (harvested from opam switch $opamPrefix):"
+foreach ($pkg in @("catala", "catala-lsp", "catala-format")) {
+    $ver = "?"; $prov = "(not pinned)"
+    try {
+        $v = (& opam show $pkg --field=version 2>$null | Out-String).Trim()
+        if ($v) { $ver = $v }
+    } catch {}
+    try {
+        $pinLine = (& opam pin list 2>$null |
+                    Where-Object { $_ -match "^$([regex]::Escape($pkg))\.\S" } |
+                    Select-Object -First 1)
+        if ($pinLine -and ($pinLine -match '^\S+\s+(\S+)\s+(.+?)\s*$')) {
+            $kind = $Matches[1]; $target = $Matches[2]
+            $prov = "$kind $target"
+            $srcDir = ($target -replace '^git\+', '') -replace '^file://', '' -replace '#.*$', ''
+            if ($srcDir -and (Test-Path (Join-Path $srcDir '.git'))) {
+                $sha = (& git -C $srcDir rev-parse --short HEAD 2>$null | Out-String).Trim()
+                if ($sha) {
+                    if (& git -C $srcDir status --porcelain 2>$null) { $sha = "$sha-dirty" }
+                    $prov = "$prov @ $sha"
+                }
+            }
+        }
+    } catch {}
+    ok ("  {0,-14} {1,-8} {2}" -f $pkg, $ver, $prov)
+}
+ok ("  {0,-14} {1,-8} {2}" -f "winlibs-gcc", $mingwGccVer, $mingwMsvcrtUrl)
+
+###############################################################################
 # VSIX: build from catala-language-server source
 ###############################################################################
 
