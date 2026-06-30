@@ -339,13 +339,21 @@ if (-not $rev) { die "could not read grammar rev from $gitNcl" }
 $tcache = "$env:LOCALAPPDATA\topiary\cache"
 $langs  = @("catala_en", "catala_fr", "catala_pl")
 foreach ($lang in $langs) {
+    # Start from a clean slate so a partial cache dir from an interrupted prior build
+    # can't interfere; topiary re-fetches and recompiles.
+    Remove-Item -Recurse -Force "$tcache\$lang" -EA SilentlyContinue
     $savedPath = $env:PATH
     $env:PATH = "$cygBin;$env:PATH"
     $env:CC   = "$cygBin\x86_64-w64-mingw32-gcc.exe"
     $env:CXX  = "$cygBin\x86_64-w64-mingw32-g++.exe"
     # Any input triggers the fetch+compile (it happens before parsing); a parse error
     # on a trivial snippet is harmless -- we only need the compiled grammar .dll.
+    # On a cold cache topiary clones; git's "Cloning into..." (a child-process write
+    # that *>$null can't swallow) is a terminating error under Stop that kills topiary
+    # mid-compile. Run under Continue so it finishes; the .dll check below is the gate.
+    $savedEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     "`n" | & $stagedTopiary format -C $gitNcl -l $lang -q $scm *> $null
+    $ErrorActionPreference = $savedEAP
     $env:PATH = $savedPath
     Remove-Item Env:CC, Env:CXX -EA SilentlyContinue
     $src = "$tcache\$lang\$rev.dll"
