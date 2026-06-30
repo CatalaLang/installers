@@ -550,7 +550,10 @@ foreach ($req in @("testcase.cmxs")) {
 $pluginNames = (Get-ChildItem "$staging\toolchain\lib\catala\plugins" | Select-Object -ExpandProperty Name) -join ', '
 ok "plugins: $pluginNames"
 
-"" | Set-Content "$staging\toolchain\lib\findlib.conf"   # relocated-switch marker
+# findlib.conf marker: same idiom relocatable opam switches use -- ocamlfind/opam
+# put findlib.conf at <prefix>/lib while `ocamlc -where` reports <prefix>/lib/ocaml.
+# clerk's poll.ml keys off that pair to resolve the libdir to toolchain\lib.
+"" | Set-Content "$staging\toolchain\lib\findlib.conf"
 
 ###############################################################################
 # Wrapper scripts  (bin\*.cmd  ->  toolchain\bin\*.exe)
