@@ -568,7 +568,6 @@ function Write-OcamlWrapper([string]$name) {
 setlocal
 for %%I in ("%~dp0..") do set "BASE=%%~fI"
 set "TC=%BASE%\toolchain"
-set "CATALA_OCAML_LIBDIR=%TC%\lib"
 set "OCAMLLIB=%TC%\lib\ocaml"
 set "NINJA_BIN=%TC%\bin\ninja.exe"
 if not defined CATALA_PLUGINS set "CATALA_PLUGINS=%TC%\lib\catala\plugins"
