@@ -306,6 +306,54 @@ if (Test-Path "$ts\configs\catala.ncl") {
     ok "catala.ncl"
 } else { warn "catala.ncl not found at $ts\configs -- catala-format may fail" }
 
+# Prebuild the tree-sitter grammars and ship the compiled .dll.
+# Out of the box, topiary fetches the grammar from git and compiles it (needs git +
+# a C/C++ compiler) on the first `catala-format` run -- which fails on a clean end-user
+# machine that has neither. Here (the build box has both) we compile it once and ship
+# the .dll; the installer then points the config at it via `grammar.source.path` (a
+# topiary >= 0.6 feature, PR #747), so the runtime needs no git and no compiler.
+#
+# We do NOT bake the install path into catala.ncl here: the path differs per scope
+# (C:\ProgramData\Catala vs %LOCALAPPDATA%\Programs\Catala) and is only known at
+# install time. So we ship the .dll plus the unmodified git-source catala.ncl, and a
+# WiX deferred custom action (grammar-config.ps1) rewrites catala.ncl with the real
+# [INSTALLFOLDER] path at install. (Done for both scopes.)
+info "Prebuilding tree-sitter grammars"
+$grammarsDir   = "$staging\toolchain\share\topiary\grammars"
+New-Item -ItemType Directory -Force $grammarsDir | Out-Null
+$stagedTopiary = "$staging\toolchain\bin\.topiary-wrapped\topiary.exe"
+$gitNcl        = "$staging\toolchain\share\topiary\configs\catala.ncl"
+$scm           = "$staging\toolchain\share\topiary\queries\catala.scm"
+# Use the full mingw gcc/g++ from opam's Cygwin root: the winlibs gcc we ship is a
+# partial (cc1-less) subset that can't compile C. topiary's tree-sitter-loader needs
+# a real C/C++ compiler at this step. git must be on PATH (it is on CI / dev boxes).
+$opamRootGr = (& opam var root 2>&1).Trim()
+$cygBin     = "$opamRootGr\.cygwin\root\bin"
+if (-not (Test-Path "$cygBin\x86_64-w64-mingw32-gcc.exe")) {
+    die "mingw gcc not found at $cygBin -- needed to prebuild tree-sitter grammars"
+}
+# The grammar revision is pinned in the (git-source) config; the compiled cache lib
+# is named <rev>.dll, so we copy exactly that and stay in lockstep with the query.
+$rev = ([regex]::Match((Get-Content $gitNcl -Raw), 'rev\s*=\s*"([0-9a-fA-F]+)"')).Groups[1].Value
+if (-not $rev) { die "could not read grammar rev from $gitNcl" }
+$tcache = "$env:LOCALAPPDATA\topiary\cache"
+$langs  = @("catala_en", "catala_fr", "catala_pl")
+foreach ($lang in $langs) {
+    $savedPath = $env:PATH
+    $env:PATH = "$cygBin;$env:PATH"
+    $env:CC   = "$cygBin\x86_64-w64-mingw32-gcc.exe"
+    $env:CXX  = "$cygBin\x86_64-w64-mingw32-g++.exe"
+    # Any input triggers the fetch+compile (it happens before parsing); a parse error
+    # on a trivial snippet is harmless -- we only need the compiled grammar .dll.
+    "`n" | & $stagedTopiary format -C $gitNcl -l $lang -q $scm *> $null
+    $env:PATH = $savedPath
+    Remove-Item Env:CC, Env:CXX -EA SilentlyContinue
+    $src = "$tcache\$lang\$rev.dll"
+    if (-not (Test-Path $src)) { die "grammar prebuild failed for $lang (no $rev.dll in $tcache\$lang)" }
+    Copy-Item $src "$grammarsDir\$lang.dll" -Force
+    ok "prebuilt grammar: $lang.dll ($([math]::Round((Get-Item $src).Length/1KB)) KB)"
+}
+
 ###############################################################################
 # MinGW runtime DLLs
 # opam on Windows (via setup-ocaml) copies needed DLLs into the switch bin dir.
@@ -561,6 +609,14 @@ New-Item -ItemType Directory -Force "$staging\toolchain\libexec" | Out-Null
 Copy-Item $defenderSrc "$staging\toolchain\libexec\defender.ps1"
 ok "defender.ps1"
 
+# grammar-config.ps1: writes catala.ncl with the real install path at install time
+# (the prebuilt grammars are shipped, but their absolute path is only known then --
+# it differs per scope). Driven by a WiX deferred custom action; harmless to re-run.
+$grammarCfgSrc = Join-Path $PSScriptRoot "grammar-config.ps1"
+if (-not (Test-Path $grammarCfgSrc)) { die "grammar-config.ps1 not found at $grammarCfgSrc" }
+Copy-Item $grammarCfgSrc "$staging\toolchain\libexec\grammar-config.ps1"
+ok "grammar-config.ps1"
+
 # install-vscode-extension.cmd: installs the bundled .vsix into VS Code. Sits at
 # the bundle root next to the .vsix; the MSI wires a Start Menu shortcut to it.
 # (The MSI can't do this itself: a per-machine install runs as SYSTEM, but
@@ -624,7 +680,8 @@ $required = @{
                           "libiconv-2.dll","libintl-8.dll","libz.dll","libzstd.dll")
     "Wrappers"        = @("catala.cmd","clerk.cmd","catala-lsp.cmd","catala-dap.cmd",
                           "catala-format.cmd")
-    "Helper scripts"  = @("defender.ps1")
+    "Helper scripts"  = @("defender.ps1","grammar-config.ps1")
+    "Prebuilt grammars" = @("catala_en.dll","catala_fr.dll","catala_pl.dll")
     "Catala plugins"  = @("explain.cmxs","lazy_interpreter.cmxs","python.cmxs","testcase.cmxs")
     "Flexdll objects" = @("flexdll_initer_mingw64.o","flexdll_mingw64.o")
     "VSIX"            = @("catala-$version.vsix")

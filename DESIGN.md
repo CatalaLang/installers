@@ -22,7 +22,7 @@ Catala/
     bin/               catala/clerk/ocamlopt/ninja/flexlink, gcc/ld/as, ...
     lib/               ocaml stdlib, zarith, catala runtime + plugins, gcc libs
     libexec/           gcc internals, defender.ps1
-    share/topiary/     queries + configs
+    share/topiary/     queries + configs + prebuilt grammars (.dll)
     x86_64-w64-mingw32/lib/   import libs for linking
   catala-<version>.vsix
 ```
@@ -54,6 +54,43 @@ comes from the opam/Cygwin sysroot (itself a mingw-native build — no
 fails the build if an imported DLL is neither bundled nor a known Windows system
 DLL — so a half-resolved toolchain (the cause of past `STATUS_DLL_NOT_FOUND` on
 clean boxes) can't ship.
+
+## Code formatting (catala-format / topiary)
+
+`catala-format` is a thin wrapper that drives the `topiary` binary, which parses
+Catala with a **tree-sitter grammar**. Out of the box topiary *fetches that grammar
+from git and compiles it with a C compiler on first use* (cached under
+`%LOCALAPPDATA%\topiary`). On a clean end-user machine — no git, no compiler, and
+the bundled gcc is a partial (cc1-less) subset — that first run **fails**
+(`Error Fetching Language: Git error: program not found`). It only appears to work
+on a dev box because the cache was populated earlier.
+
+So at **build time** (where git + a real mingw gcc are present) we compile the three
+grammars (`catala_{en,fr,pl}`) once and ship the `.dll`s in
+`toolchain\share\topiary\grammars\`. At runtime topiary loads them via
+`grammar.source.path` instead of fetching git — so the end-user machine needs neither
+git nor a C compiler. The grammars only import `kernel32`/`msvcrt`, so they pass the
+import-closure check. The `.dll` is pinned to the same grammar `rev` as the query.
+
+`grammar.source.path` is a topiary **≥ 0.6.0** feature (v0.6.0 "Gilded Ginkgo",
+2025-01-30; [PR #747](https://github.com/tweag/topiary/pull/747), *"Added support for
+specifying paths to prebuilt grammars in Topiary's configuration"*). It does not exist
+in 0.5.x — that is the concrete reason catala-format moved to topiary 0.6 (0.6.0 is
+also the last 0.6.x on opam). 0.6 also changed grammar building to `tree-sitter-loader`
+([#830](https://github.com/tweag/topiary/pull/830)) and config priority
+([#790](https://github.com/tweag/topiary/pull/790)).
+
+**The `source.path` is absolute and only known at install time** (it differs per
+scope: `C:\ProgramData\Catala` vs `%LOCALAPPDATA%\Programs\Catala`), so we do **not**
+bake it at build time. `build-bundle.ps1` ships the `.dll`s plus the unmodified
+git-source `catala.ncl`; a WiX **deferred custom action** (`grammar-config.ps1`, run
+after `InstallFiles`) rewrites `catala.ncl` in place with the real `[INSTALLFOLDER]`
+path. This works for **both** scopes (and avoids a build-time hardcoded path, which
+would be fragile and wrong for per-user). catala-format itself stays
+platform-agnostic — it just reads whatever `catala.ncl` it finds next to the binary
+(`<exec_dir>/../share/topiary/configs/`); the obsolete Windows-specific
+`%LOCALAPPDATA%\Catala` lookup (which assumed a topiary *fork* with a built-in config)
+was removed. On Linux/opam the shipped git-source `catala.ncl` is used unchanged.
 
 ## Windows Defender exclusions
 

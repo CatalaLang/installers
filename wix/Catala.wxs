@@ -45,9 +45,13 @@
   <?if $(var.Scope) = "perMachine" ?>
   <?define RegRoot = "HKLM" ?>
   <?define EnvSystem = "yes" ?>
+  <!-- Deferred CAs run in the system (elevated) context to write under ProgramData. -->
+  <?define DeferredImpersonate = "no" ?>
   <?else?>
   <?define RegRoot = "HKCU" ?>
   <?define EnvSystem = "no" ?>
+  <!-- Per-user install isn't elevated; deferred CAs run as the user (writes LOCALAPPDATA). -->
+  <?define DeferredImpersonate = "yes" ?>
   <?endif?>
 
   <Package
@@ -129,6 +133,21 @@
       <?endif?>
     </DirectoryRef>
 
+    <!-- =====================================================================
+         Grammar config (always): point catala.ncl at the bundled prebuilt
+         grammar .dlls via topiary's grammar.source.path (>= 0.6, PR #747). The
+         absolute path is only known now and differs per scope, so we resolve it
+         at install rather than baking it at build time. Deferred CA runs after
+         the files are on disk; immediate type-51 marshals [INSTALLFOLDER] into
+         its CustomActionData. Return=check -> formatting must be wired correctly.
+         ===================================================================== -->
+    <CustomAction Id="ConfigureGrammar" BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec64" Execute="deferred"
+                  Impersonate="$(var.DeferredImpersonate)" Return="check" />
+    <CustomAction Id="SetConfigureGrammar" Property="ConfigureGrammar"
+                  Execute="immediate"
+                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]toolchain\libexec\grammar-config.ps1&quot; -InstallDir &quot;[INSTALLFOLDER]&quot;" />
+
     <?if $(var.Defender) = "1" ?>
     <!-- =====================================================================
          Defender exclusions (opt-in, self-elevating, non-fatal)
@@ -169,10 +188,20 @@
                   Execute="immediate"
                   Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]toolchain\libexec\defender.ps1&quot; -Remove -SelfElevate -Quiet -InstallDir &quot;[INSTALLFOLDER]&quot;" />
 
+    <?endif?>
+
     <InstallExecuteSequence>
+      <!-- Grammar config: after files are on disk, on fresh install / repair /
+           upgrade (NOT on uninstall, where the file is removed with its component). -->
+      <Custom Action="SetConfigureGrammar" After="InstallFiles"
+              Condition="NOT Installed OR REINSTALL" />
+      <Custom Action="ConfigureGrammar" After="SetConfigureGrammar"
+              Condition="NOT Installed OR REINSTALL" />
+
+      <?if $(var.Defender) = "1" ?>
       <!-- Add after files are on disk (defender.ps1 must exist), on fresh
            install / change when opted in. -->
-      <Custom Action="SetTuneDefenderAdd" After="InstallFiles"
+      <Custom Action="SetTuneDefenderAdd" After="ConfigureGrammar"
               Condition="TUNE_DEFENDER=&quot;1&quot; AND NOT Installed" />
       <Custom Action="TuneDefenderAdd" After="SetTuneDefenderAdd"
               Condition="TUNE_DEFENDER=&quot;1&quot; AND NOT Installed" />
@@ -182,8 +211,8 @@
               Condition="REMOVE=&quot;ALL&quot; AND DEFENDER_WAS_TUNED" />
       <Custom Action="TuneDefenderRemove" After="SetTuneDefenderRemove"
               Condition="REMOVE=&quot;ALL&quot; AND DEFENDER_WAS_TUNED" />
+      <?endif?>
     </InstallExecuteSequence>
-    <?endif?>
 
     <!-- Minimal click-through UI; install dir is fixed (per-user). A custom
          dialog with a "tune Defender" checkbox is a follow-up; for now the
