@@ -123,8 +123,9 @@ ok "catala-format"
 # checkout), and the pinned winlibs gcc. Informational only -- never fatal.
 ###############################################################################
 info "Build inputs (harvested from opam switch $opamPrefix):"
+$manifestComponents = [ordered]@{}
 foreach ($pkg in @("catala", "catala-lsp", "catala-format")) {
-    $ver = "?"; $prov = "(not pinned)"
+    $ver = "?"; $prov = "(not pinned)"; $sha = $null
     try {
         $v = (& opam show $pkg --field=version 2>$null | Out-String).Trim()
         if ($v) { $ver = $v }
@@ -143,11 +144,26 @@ foreach ($pkg in @("catala", "catala-lsp", "catala-format")) {
                     if (& git -C $srcDir status --porcelain 2>$null) { $sha = "$sha-dirty" }
                     $prov = "$prov @ $sha"
                 }
+            } elseif ($target -match '#([0-9a-fA-F]{7,40})') {
+                # Pinned to an explicit git SHA (CI/release builds) rather than a
+                # local checkout: take the SHA straight from the pin target.
+                $sha = $Matches[1]
+                $prov = "$prov @ $sha"
             }
         }
     } catch {}
+    $manifestComponents[$pkg] = [ordered]@{ version = $ver; pin = $prov; sha = $sha }
     ok ("  {0,-14} {1,-8} {2}" -f $pkg, $ver, $prov)
 }
+
+# This installer repo's own SHA, for the build manifest.
+$installerSha = $null
+try {
+    $installerSha = (& git -C $PSScriptRoot rev-parse --short HEAD 2>$null | Out-String).Trim()
+    if ($installerSha -and (& git -C $PSScriptRoot status --porcelain 2>$null)) {
+        $installerSha = "$installerSha-dirty"
+    }
+} catch {}
 ok ("  {0,-14} {1,-8} {2}" -f "winlibs-gcc", $mingwGccVer, $mingwMsvcrtUrl)
 
 ###############################################################################
@@ -248,6 +264,27 @@ Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
 ) | ForEach-Object { New-Item -ItemType Directory -Force $_ | Out-Null }
 
 $version | Set-Content "$staging\version" -NoNewline
+
+# Build manifest: records exactly what went into this bundle so an alpha tester
+# can report their build (`type "%ProgramData%\Catala\manifest.json"`) and we can
+# reproduce it. Written at the staging root, so WiX's <Files Include="**"> glob
+# installs it at INSTALLFOLDER\manifest.json automatically (no .wxs change).
+$lspBranchOut = if ($lspRepo) { $lspBranch } else { $null }
+$lspShaOut    = if ($lspRepo) { $lspSha }    else { $null }
+$lspVsixOut   = if ($lspRepo) { "catala-$version.vsix" } else { $null }
+$buildManifest = [ordered]@{
+    bundle_version         = $version
+    built_at_utc           = (Get-Date).ToUniversalTime().ToString('o')
+    installer_sha          = $installerSha
+    opam_packages          = $manifestComponents
+    catala_language_server = [ordered]@{ branch = $lspBranchOut; sha = $lspShaOut; vsix = $lspVsixOut }
+    winlibs_gcc            = $mingwGccVer
+}
+[System.IO.File]::WriteAllText(
+    "$staging\manifest.json",
+    ($buildManifest | ConvertTo-Json -Depth 6),
+    (New-Object System.Text.UTF8Encoding($false)))
+ok "manifest.json"
 
 ###############################################################################
 # Toolchain binaries
