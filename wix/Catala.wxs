@@ -72,12 +72,23 @@
 
     <Property Id="ARPURLINFOABOUT" Value="https://catala-lang.org" />
 
+    <!-- VS Code extension is offered as an optional, default-on FEATURE (the
+         "VSCodeExt" feature below) so WixUI_FeatureTree renders it as a native
+         check box — no fragile custom-dialog authoring. Ticking it installs a
+         Start-Menu shortcut to install-vscode-extension.cmd, which the user runs
+         in their own shell (a per-machine MSI runs as SYSTEM, but VS Code
+         extensions install per-user). Graceful degradation lives in the .cmd: it
+         does `where code` and prints "install VS Code first" rather than failing
+         when VS Code is absent, so leaving it ticked is harmless either way. -->
+
+
     <?if $(var.Scope) = "perMachine" ?>
-    <!-- C:\ProgramData\Catala (per-machine, elevated). A SPACE-FREE root is
-         required: clerk's generated ninja passes some paths (e.g. -I <libdir>)
-         unquoted, so an install under "C:\Program Files" breaks the OCaml
-         backend. CommonAppDataFolder (C:\ProgramData) is the space-free
-         machine-wide standard location WiX can auto-GUID. -->
+    <!-- C:\ProgramData\Catala (per-machine, elevated). CommonAppDataFolder is
+         the machine-wide standard location WiX can auto-GUID. It is also
+         space-free: clerk now quotes exe paths in its ninja commands (catala
+         dbdfcb442, validated on a "C:\sp ace" install), but a few include-dir
+         paths may still be unquoted, so a space-free root remains the safe
+         default until that hardening lands. -->
     <StandardDirectory Id="CommonAppDataFolder">
       <Directory Id="INSTALLFOLDER" Name="Catala" />
     </StandardDirectory>
@@ -90,12 +101,28 @@
     </StandardDirectory>
     <?endif?>
 
-    <Feature Id="Main" Title="Catala toolchain" Level="1">
+    <!-- Start-Menu folder for the (optional) VS Code extension installer shortcut. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="CatalaMenuFolder" Name="Catala" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Catala toolchain" Level="1"
+             Description="The Catala compiler, clerk, the language server and formatter."
+             AllowAbsent="no" AllowAdvertise="no">
       <ComponentGroupRef Id="ToolchainFiles" />
       <ComponentRef Id="EnvPath" />
       <?if $(var.Defender) = "1" ?>
       <ComponentRef Id="DefenderMarker" />
       <?endif?>
+    </Feature>
+
+    <!-- Optional, default-on. WixUI_FeatureTree shows this as a check box the
+         user can untick. Ticked: install the extension into VS Code now AND drop
+         a Start-Menu shortcut to reinstall it later. Unticked: neither. -->
+    <Feature Id="VSCodeExt" Level="1" Title="VS Code extension"
+             Description="Installs the Catala extension into VS Code now (and adds a Start-Menu shortcut to reinstall it later). Requires VS Code; skipped harmlessly if VS Code is not installed."
+             AllowAdvertise="no">
+      <ComponentRef Id="VSCodeExtShortcut" />
     </Feature>
 
     <!--
@@ -133,6 +160,23 @@
       <?endif?>
     </DirectoryRef>
 
+    <!-- Optional Start-Menu shortcut to the VS Code extension installer. Only
+         installed when the UI checkbox (INSTALLVSCODEEXT) is on. The shortcut
+         just runs install-vscode-extension.cmd, which degrades gracefully when
+         VS Code is absent, so shipping it is harmless either way. -->
+    <DirectoryRef Id="CatalaMenuFolder">
+      <Component Id="VSCodeExtShortcut" Guid="d5f1c4b3-9e66-4a5c-8b2d-3f0e1a2b4c56">
+        <Shortcut Id="InstallVSCodeExt"
+                  Name="Install Catala VS Code extension"
+                  Description="Installs the bundled Catala extension into VS Code (requires VS Code)."
+                  Target="[INSTALLFOLDER]install-vscode-extension.cmd"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveCatalaMenuFolder" On="uninstall" />
+        <RegistryValue Root="$(var.RegRoot)" Key="Software\Catala"
+                       Name="VSCodeShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
     <!-- =====================================================================
          Grammar config (always): point catala.ncl at the bundled prebuilt
          grammar .dlls via topiary's grammar.source.path (>= 0.6, PR #747). The
@@ -147,6 +191,25 @@
     <CustomAction Id="SetConfigureGrammar" Property="ConfigureGrammar"
                   Execute="immediate"
                   Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]toolchain\libexec\grammar-config.ps1&quot; -InstallDir &quot;[INSTALLFOLDER]&quot;" />
+
+    <!-- =====================================================================
+         Direct VS Code extension install (only when the VSCodeExt feature is
+         selected). Impersonate=yes -> runs as the invoking user even for a
+         perMachine (SYSTEM) install, because extensions are per-user. The
+         script exits 0 when VS Code is absent and Return=ignore makes the CA
+         non-fatal, so it never blocks the install. The Start-Menu shortcut
+         stays as a fallback (silent/SYSTEM installs, or admin != end user).
+         ===================================================================== -->
+    <CustomAction Id="InstallVSCodeExt" BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec64" Execute="deferred"
+                  Impersonate="yes" Return="ignore" />
+    <!-- NOTE: no -InstallDir argument. [INSTALLFOLDER] ends in a backslash, so
+         "[INSTALLFOLDER]" would become ...Catala\" and the \" escapes the closing
+         quote (the arg gets mangled -> the script can't find the .vsix). The
+         script derives its install dir from $PSScriptRoot instead. -->
+    <CustomAction Id="SetInstallVSCodeExt" Property="InstallVSCodeExt"
+                  Execute="immediate"
+                  Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]toolchain\libexec\install-vscode-ext.ps1&quot;" />
 
     <?if $(var.Defender) = "1" ?>
     <!-- =====================================================================
@@ -198,6 +261,13 @@
       <Custom Action="ConfigureGrammar" After="SetConfigureGrammar"
               Condition="NOT Installed OR REINSTALL" />
 
+      <!-- Direct extension install when the VS Code feature is selected for
+           local install (&VSCodeExt=3), on fresh install / repair / upgrade. -->
+      <Custom Action="SetInstallVSCodeExt" After="ConfigureGrammar"
+              Condition="&amp;VSCodeExt=3 AND (NOT Installed OR REINSTALL)" />
+      <Custom Action="InstallVSCodeExt" After="SetInstallVSCodeExt"
+              Condition="&amp;VSCodeExt=3 AND (NOT Installed OR REINSTALL)" />
+
       <?if $(var.Defender) = "1" ?>
       <!-- Add after files are on disk (defender.ps1 must exist), on fresh
            install / change when opted in. -->
@@ -214,10 +284,11 @@
       <?endif?>
     </InstallExecuteSequence>
 
-    <!-- Minimal click-through UI; install dir is fixed (per-user). A custom
-         dialog with a "tune Defender" checkbox is a follow-up; for now the
-         option is command-line driven (TUNE_DEFENDER=1). -->
-    <ui:WixUI Id="WixUI_Minimal" />
+    <!-- FeatureTree UI: welcome -> license -> feature checkboxes -> confirm.
+         The feature tree gives a native check box for the optional VS Code
+         extension shortcut (see the VSCodeExt feature). The Defender option
+         stays command-line driven (TUNE_DEFENDER=1) for now. -->
+    <ui:WixUI Id="WixUI_FeatureTree" />
     <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)license.rtf" />
 
   </Package>
