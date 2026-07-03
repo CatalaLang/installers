@@ -617,7 +617,10 @@ set "OCAMLLIB=%TC%\lib\ocaml"
 set "NINJA_BIN=%TC%\bin\ninja.exe"
 if not defined CATALA_PLUGINS set "CATALA_PLUGINS=%TC%\lib\catala\plugins"
 set "LIBRARY_PATH=%TC%\x86_64-w64-mingw32\lib"
-set "FLEXLINKFLAGS=-L%TC%\lib\ocaml\flexdll"
+:: Quote the -L path: unlike the path-style vars above (which tolerate spaces),
+:: FLEXLINKFLAGS is a flag string that flexlink re-tokenizes on spaces, so an
+:: install dir like "C:\Program Files\Catala" would otherwise split mid-path.
+set "FLEXLINKFLAGS=-L"%TC%\lib\ocaml\flexdll""
 set "PATH=%TC%\bin;%PATH%"
 "%TC%\bin\$name.exe" %*
 exit /b %ERRORLEVEL%
