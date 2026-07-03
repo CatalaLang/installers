@@ -890,7 +890,12 @@ if (-not $msiVersion) { die "Could not derive a numeric MSI version from '$versi
 
 info "Building MSI (WiX) version $msiVersion"
 New-Item -ItemType Directory -Force $OutputDir | Out-Null
-$msiPath = Join-Path (Resolve-Path $OutputDir) "$bundleName.msi"
+# The MSI filename carries the installer short-sha so two builds of the same
+# catala version (e.g. installer-only fixes) are physically distinguishable.
+# The ProductVersion stays the catala version; the sha is a filename-only handle
+# (also recorded in manifest.json). Staging dir name is left unchanged.
+$msiName = if ($installerSha) { "$bundleName-$installerSha" } else { $bundleName }
+$msiPath = Join-Path (Resolve-Path $OutputDir) "$msiName.msi"
 Remove-Item $msiPath -ErrorAction SilentlyContinue
 
 $wxs = Join-Path $PSScriptRoot "wix\Catala.wxs"
@@ -909,7 +914,7 @@ if ($LASTEXITCODE -ne 0) { die "wix build failed (exit $LASTEXITCODE)" }
 if (-not (Test-Path $msiPath)) { die "wix build reported success but $msiPath is missing" }
 
 $hash = (Get-FileHash $msiPath -Algorithm SHA256).Hash.ToLower()
-"$hash  $bundleName.msi" | Set-Content "$msiPath.sha256"
+"$hash  $msiName.msi" | Set-Content "$msiPath.sha256"
 
 $sizeMB = [math]::Round((Get-Item $msiPath).Length / 1MB, 1)
 info "MSI ready: $msiPath ($sizeMB MB)"

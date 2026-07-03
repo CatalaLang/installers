@@ -124,7 +124,10 @@ jobs:
           path: |
             catala-src/_bundle/catala-*.msi
             catala-src/_bundle/catala-*.msi.sha256
-          retention-days: 7
+          # Wider window to vet a build before promoting it to a (permanent)
+          # release via publish.yml. The release is the durable artifact; this is
+          # just the source it's promoted from.
+          retention-days: 30
 
   bundle-windows-test:
     name: Bundle (Windows) — test (clean install)

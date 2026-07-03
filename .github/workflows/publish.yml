@@ -1,0 +1,55 @@
+name: Publish installer release
+
+# Manual-only. Promotes the *exact* MSI bytes from a vetted CI run to a GitHub
+# release (assets never expire), rather than rebuilding. Run it from the Actions
+# tab once a build's artifact has been tested good.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: CI run id whose bundle-windows artifact to publish
+        required: true
+      tag:
+        description: Release tag, e.g. catala-1.2.0-alpha1 (the -alphaN lives here, not in the MSI version)
+        required: true
+      prerelease:
+        description: Mark as pre-release (soft release, not flagged "Latest")
+        type: boolean
+        default: true
+      draft:
+        description: Create as a draft (maintainer-only until published)
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release
+      actions: read     # read the artifact from the other run
+    steps:
+      - name: Download the vetted artifact (exact bytes, no rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-windows
+          path: out
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show what will be published
+        run: ls -l out
+
+      - name: Create the release with the MSI + checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          flags=""
+          [ "${{ inputs.prerelease }}" = "true" ] && flags="$flags --prerelease"
+          [ "${{ inputs.draft }}" = "true" ] && flags="$flags --draft"
+          gh release create "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            $flags \
+            --title "Catala Windows installer — ${{ inputs.tag }}" \
+            --notes "Windows alpha installer, promoted from CI run ${{ inputs.run_id }}. Exact component SHAs are in \`manifest.json\` inside the install." \
+            out/catala-*.msi out/catala-*.msi.sha256

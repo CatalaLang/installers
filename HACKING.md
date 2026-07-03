@@ -66,11 +66,42 @@ any Defender exclusions the installer added).
 + catala-format + catala-lsp, install WiX, run `build-bundle.ps1`, upload the MSI),
 then **test** (silent install, smoke checks + catala-format unicode roundtrip,
 `clerk test` against catala-examples, uninstall + assert clean). `workflow_dispatch`
-inputs pin `catala_rev` / `catala_format_rev` / `catala_lsp_rev`.
+inputs pin `catala_rev` / `catala_format_rev` / `catala_lsp_rev`. The `bundle-windows`
+artifact (MSI + `.sha256`) is kept 30 days.
+
+## Making an alpha release
+
+Releases are **promoted from a vetted CI build**, not rebuilt — so the published
+`.msi` is byte-for-byte what you tested.
+
+1. **Build.** Push to `main` (or `workflow_dispatch` on `ci.yml`). The build job
+   uploads a `bundle-windows` artifact (MSI + `.sha256`).
+2. **Vet.** Open the run → Artifacts → download `bundle-windows` → install and test.
+   The run's id is the number in its URL (`…/actions/runs/<run_id>`) — that's what
+   you promote.
+3. **Promote.** Actions → **Publish installer release** (`.github/workflows/publish.yml`)
+   → *Run workflow*, with:
+   - `run_id` = the vetted run,
+   - `tag` = e.g. `catala-1.2.0-alpha1` (the `-alphaN` lives in the tag, **not** the
+     MSI ProductVersion),
+   - `prerelease` = true (soft release: shown on Releases, not flagged "Latest"),
+   - `draft` = true to keep it maintainer-only until you publish.
+
+   It downloads that run's exact MSI and attaches it to a GitHub release. Release
+   assets never expire (unlike the 30-day artifact).
+
+**Versioning** (see `versioning.md`): the MSI ProductVersion is the **catala compiler
+version** (users think "catala toolchain 1.x"); the filename carries the installer
+short-sha so two builds of one catala version are distinguishable; `manifest.json`
+inside the install is the source of truth for every component SHA. Installer-only
+fixes ship as new artifacts of the same catala version — no opam release needed.
 
 ## Relation to the catala repo
 
-Depends on the catala branch `clerk-ocaml-libdir` — a few Windows fixes for clerk
-(notably `CATALA_OCAML_LIBDIR`, so clerk finds the bundled libs at a non-standard
-path; plus path-quoting and CRLF test-output fixes), being upstreamed. Once merged,
+Depends on the catala branch `clerk-windows-fixes` — Windows fixes for clerk being
+upstreamed: case-insensitive drive-letter handling in path relativization, valid
+`file://` URLs for clickable links, and quoting of exe paths in the generated ninja
+(so an install dir with spaces works), plus earlier CRLF test-output fixes. The
+bundled libs are found via an empty `findlib.conf` marker (not `CATALA_OCAML_LIBDIR`).
+CI also pins `catala-language-server` to `fix/windows-vscode-spawn`. Once these merge,
 this repo builds against catala `master`.
