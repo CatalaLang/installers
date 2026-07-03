@@ -55,6 +55,17 @@ jobs:
       - name: Build and install catala
         run: opam install ./catala-src/catala.opam
 
+      - name: Run catala OCaml unit tests (path / file-URL logic)
+        # Precaution: exercise the platform-parameterized path + file:// URL unit
+        # tests (compiler/tests.exe) that guard the Windows drive-case / UNC /
+        # quoting logic. They force ~win32 explicitly, so they assert the Windows
+        # behaviour even here. Targeted at tests.exe only (NOT `dune runtest`,
+        # which would also pull in the heavy reftest suite). These also run,
+        # faster, in catala's own PR CI; this is belt-and-suspenders for the
+        # bundle build until the fixes land in catala master.
+        working-directory: catala-src
+        run: opam exec -- dune exec compiler/tests.exe
+
       - name: Install topiary 0.6.0 (prebuilt binary, fake opam pin)
         run: |
           $url = "https://github.com/tweag/topiary/releases/download/v0.6.0/topiary-cli-x86_64-pc-windows-msvc.zip"
