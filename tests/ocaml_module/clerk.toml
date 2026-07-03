@@ -1,0 +1,10 @@
+# Intentionally (almost) empty: an empty config parses to all defaults.
+#
+# Its job is to ANCHOR the clerk project root to this directory. Without a
+# clerk.toml here, `clerk test` walks up (clerk_cli: clerk.toml -> catala.opam
+# -> .git) and lands on the repository root. In CI that root also contains the
+# cloned `catala-examples/` checkout, so a bare `clerk test` would try to build
+# the entire examples tree and fail (e.g. `ninja: 'France@src' ... no known
+# rule`). Anchoring here scopes the run to this external-module test only.
+#
+# Do not delete this file, even though it looks empty.
