@@ -54,11 +54,31 @@ rollout (Intune/GPO), install the per-machine MSI silently with `TUNE_DEFENDER=1
 
 ### VS Code extension
 
-Install **Catala** from the VS Code Marketplace, or the bundled `.vsix`:
+The installer bundles the Catala VS Code extension (`catala-<version>.vsix`, in
+`$base`) and, by default, **installs it into VS Code for you**. The installer's
+*VS Code extension* checkbox (ticked by default) runs `code --install-extension`
+on the bundled `.vsix` during install. If VS Code isn't present it degrades
+gracefully — the install still succeeds, and a **Start-Menu shortcut** ("Install
+Catala VS Code extension") is left behind so you can install it later once VS Code
+is set up.
+
+**Restart VS Code afterwards** (fully quit, don't just reload the window) so the
+extension picks up the new `PATH` — otherwise `catala` won't be found and
+formatting/LSP won't work until VS Code is relaunched from a fresh environment.
+
+To install (or reinstall) manually — e.g. you unticked the box, or VS Code was
+added later — double-click **`install-vscode-extension.cmd`** in `$base`, or from
+a terminal:
 
 ```powershell
 code --install-extension (Get-ChildItem "$base\catala-*.vsix").FullName
 ```
+
+This needs VS Code with its `code` command on `PATH` (in VS Code: run *Shell
+Command: Install 'code' command in PATH* from the Command Palette). Uninstalling
+Catala leaves the extension in place. (You can instead install **Catala** from the
+VS Code Marketplace, but the bundled `.vsix` matches the toolchain version you just
+installed.)
 
 ### Uninstall
 

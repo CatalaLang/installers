@@ -8,7 +8,8 @@ a complete snapshot, with no opam or network resolution at install time.
 Two stages, both run on Windows (the CI `windows-latest` runner, or a dev box):
 
 1. **Stage** (`build-bundle.ps1`): assemble a relocatable toolchain tree from an
-   opam switch + a pinned MinGW-w64 gcc, plus the VS Code `.vsix`.
+   opam switch + a pinned MinGW-w64 gcc, plus the VS Code `.vsix` and its
+   installer helper.
 2. **Package** (`wix/Catala.wxs`, WiX dotnet tool): harvest that tree into an MSI.
 
 Output: `catala-<version>-windows-x86_64.msi` (+ `.sha256`).
@@ -21,30 +22,42 @@ Catala/
   toolchain/           actual binaries + data (not on PATH directly)
     bin/               catala/clerk/ocamlopt/ninja/flexlink, gcc/ld/as, ...
     lib/               ocaml stdlib, zarith, catala runtime + plugins, gcc libs
-    libexec/           gcc internals, defender.ps1
+    libexec/           gcc internals, defender.ps1, install-vscode-ext.ps1
+                       (non-interactive .vsix installer, run by the MSI custom action)
     share/topiary/     queries + configs + prebuilt grammars (.dll)
     x86_64-w64-mingw32/lib/   import libs for linking
   catala-<version>.vsix
+  install-vscode-extension.cmd   interactive .vsix installer (Start-Menu shortcut target)
 ```
 
 The `bin\*.cmd` wrappers compute their own location (`%~dp0..`) and set
-`CATALA_OCAML_LIBDIR`, `OCAMLLIB`, `NINJA_BIN`, `CATALA_PLUGINS`, `LIBRARY_PATH`,
-`FLEXLINKFLAGS` and `PATH` (with `setlocal` isolation, so they don't disturb a
-developer's own opam) before exec-ing the real binary. The tree is fully
-relocatable; the MSI only has to add `bin\` to PATH.
+`OCAMLLIB`, `NINJA_BIN`, `CATALA_PLUGINS`, `LIBRARY_PATH`, `FLEXLINKFLAGS` and
+`PATH` (with `setlocal` isolation, so they don't disturb a developer's own opam)
+before exec-ing the real binary. The bundled OCaml libs are located via an empty
+`findlib.conf` marker in the tree, not a `CATALA_OCAML_LIBDIR` env var. The tree is
+fully relocatable; the MSI only has to add `bin\` to PATH.
 
 ## Install model
 
 - **Two scopes, chosen at build time (`-Scope`):** *per-machine* (default, the
   shipped MSI) → `C:\ProgramData\Catala`, system PATH, elevated, for IT push
   (Intune/GPO); *per-user* → `%LOCALAPPDATA%\Programs\Catala`, user PATH, no admin
-  (for machines without local admin). Both target **space-free** paths: clerk's
-  generated build rules aren't fully space-safe yet, so `C:\Program Files` is
-  avoided.
+  (for machines without local admin). Both default to space-free roots, but an
+  install dir **with** spaces now works too: the two layers that broke it are fixed
+  — the bundle wrapper quotes its `-L` flexlink flag, and clerk quotes the exe
+  paths in its generated ninja commands (catala `clerk-windows-fixes`).
 - **PATH** is managed via the MSI `Environment` table (added on install, removed
   on uninstall). **Upgrades** use `MajorUpgrade` (newer replaces older; downgrades
   blocked). **Uninstall** via Add/Remove Programs or `msiexec /x`.
-- The only shipped helper script is `defender.ps1` (in `toolchain\libexec`).
+- **VS Code extension** is an optional, default-on feature (`WixUI_FeatureTree`
+  checkbox). When ticked, a deferred **impersonated** custom action runs
+  `install-vscode-ext.ps1` (`code --install-extension`) so the extension lands in
+  the *invoking user's* VS Code even though a per-machine MSI runs as SYSTEM;
+  `Return="ignore"` makes it non-fatal when VS Code is absent. A Start-Menu
+  shortcut to `install-vscode-extension.cmd` is the manual fallback. The extension
+  is **not** removed on uninstall (VS Code owns its own extension lifecycle).
+- Shipped helper scripts: `defender.ps1`, `install-vscode-ext.ps1` (in
+  `toolchain\libexec`) and `install-vscode-extension.cmd` (at the install root).
 
 ## Self-containment
 
@@ -114,8 +127,11 @@ install still succeeds. In the MSI it's a deferred custom action gated on
   [winlibs](https://github.com/brechtsanders/winlibs_mingw) release — MSVCRT (not
   UCRT) links `msvcrt.dll`, always present on Windows; UCRT DLLs may be absent on
   clean machines. Only the ~16 MB flexlink needs is extracted (not the ~260 MB zip).
-- **`CATALA_OCAML_LIBDIR`** support in clerk (catala branch `clerk-ocaml-libdir`),
-  so clerk finds the bundled OCaml libs at a non-standard path. Pending upstream.
+- A **catala build with the Windows fixes** (branch `clerk-windows-fixes`):
+  drive-case path relativization, valid `file://` URLs, and quoting of exe paths in
+  the generated ninja (spaces-in-install-dir). The bundled OCaml libs are located
+  via an empty **`findlib.conf`** marker in the tree (not the old
+  `CATALA_OCAML_LIBDIR` env var). Pending upstream.
 
 ## Constraints
 
@@ -126,9 +142,12 @@ install still succeeds. In the MSI it's a deferred custom action gated on
 
 ## Open / not yet built
 
-- **Defender UI checkbox** — `TUNE_DEFENDER` is command-line only; the MSI uses
-  `WixUI_Minimal`. A "speed up builds" checkbox is a follow-up.
+- **Defender UI checkbox** — `TUNE_DEFENDER` is still command-line only. The UI is
+  now `WixUI_FeatureTree` (it already renders the VS Code extension feature), so a
+  "speed up builds" checkbox could hang off the same dialog — not yet wired.
 - **Code signing** — unsigned third-party exes + MSI draw SmartScreen/Defender
   scrutiny; signing is the proper fix for managed/gov machines.
-- **Release workflow** — build on a tag, upload MSI + checksum to a GitHub release.
 - **macOS / Linux** — out of scope here; use opam.
+
+(The release workflow now exists — `.github/workflows/publish.yml` promotes a
+vetted CI artifact to a GitHub release; see HACKING.md → "Making an alpha release".)
