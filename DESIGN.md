@@ -62,9 +62,11 @@ fully relocatable; the MSI only has to add `bin\` to PATH.
   shipped MSI) → `C:\ProgramData\Catala`, system PATH, elevated, for IT push
   (Intune/GPO); *per-user* → `%LOCALAPPDATA%\Programs\Catala`, user PATH, no admin
   (for machines without local admin). Both default to space-free roots, but an
-  install dir **with** spaces now works too: the two layers that broke it are fixed
-  — the bundle wrapper quotes its `-L` flexlink flag, and clerk quotes the exe
-  paths in its generated ninja commands (catala `clerk-windows-fixes`).
+  install dir **with** spaces now works too: the three layers that broke it are
+  fixed on catala `clerk-windows-fixes` — the bundle wrapper quotes its `-L`
+  flexlink flag, and clerk quotes both the exe paths and the `-I` include dirs
+  (bundled zarith + Catala runtime) in its generated ninja rule commands. (The
+  currently shipped MSI predates the include-dir fix; rebuild from the branch.)
 - **PATH** is managed via the MSI `Environment` table (added on install, removed
   on uninstall). **Upgrades** use `MajorUpgrade` (newer replaces older; downgrades
   blocked). **Uninstall** via Add/Remove Programs or `msiexec /x`.
@@ -147,8 +149,9 @@ install still succeeds. In the MSI it's a deferred custom action gated on
   UCRT) links `msvcrt.dll`, always present on Windows; UCRT DLLs may be absent on
   clean machines. Only the ~16 MB flexlink needs is extracted (not the ~260 MB zip).
 - A **catala build with the Windows fixes** (branch `clerk-windows-fixes`):
-  drive-case path relativization, valid `file://` URLs, and quoting of exe paths in
-  the generated ninja (spaces-in-install-dir). The bundled OCaml libs are located
+  drive-case path relativization, valid `file://` URLs, and quoting of exe paths
+  and `-I` include dirs in the generated ninja rule commands (spaces-in-install-dir).
+  The bundled OCaml libs are located
   via an empty **`findlib.conf`** marker in the tree (not the old
   `CATALA_OCAML_LIBDIR` env var). Pending upstream.
 
