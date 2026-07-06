@@ -14,6 +14,25 @@ Two stages, both run on Windows (the CI `windows-latest` runner, or a dev box):
 
 Output: `catala-<version>-windows-x86_64.msi` (+ `.sha256`).
 
+## Why an installer (vs. native opam)
+
+The installer delivers value on two independent axes; either alone justifies it.
+
+- **Provisioning** — a Windows user gets the whole toolchain (compiler, clerk, LSP,
+  DAP, formatter, native build chain) from one `.msi`: no opam, no OCaml, no network
+  resolution. This stands on its own even against a working native opam setup — it's
+  a double-click, not a switch to build and babysit.
+- **Coherence** — the bundle ships one known-good tuple
+  `{catala, clerk, catala-lsp, catala-dap, catala-format, .vsix}` that cannot drift.
+  A lot of Windows breakage in practice *is* drift: several opam switches holding
+  different catala/LSP couples, plus a Marketplace `.vsix` pinned to none of them, so
+  the extension ends up driving a toolchain it doesn't match. The bundle fixes this by
+  construction, and `manifest.json` records every shipped SHA as the version contract.
+
+The Windows fixes this repo depends on (see Build inputs) are upstream-bound fixes to
+catala/clerk/the extension *themselves*, so native Windows opam users benefit from them
+too — the installer's own contribution is provisioning + coherence, not forked behaviour.
+
 ## Installed layout
 
 ```
@@ -135,8 +154,9 @@ install still succeeds. In the MSI it's a deferred custom action gated on
 
 ## Constraints
 
-- **External OCaml modules:** programs depending on arbitrary opam packages can't
-  be compiled with the bundle — that audience uses a real opam install.
+- **External OCaml modules with third-party deps:** programs depending on arbitrary
+  opam packages can't be compiled with the bundle's partial toolchain — that audience
+  uses a real opam install today. Easing this is future work (see Open / not yet built).
 - **catala opam repo:** `gitlab.inria.fr/catala/opam-repository` is needed to
   install `catala-lsp` / current `catala-format` (not on opam.ocaml.org).
 
@@ -147,6 +167,19 @@ install still succeeds. In the MSI it's a deferred custom action gated on
   "speed up builds" checkbox could hang off the same dialog — not yet wired.
 - **Code signing** — unsigned third-party exes + MSI draw SmartScreen/Defender
   scrutiny; signing is the proper fix for managed/gov machines.
+- **External modules with dependencies** — the partial toolchain compiles
+  Catala-generated `.ml` + the runtime, but not arbitrary opam deps. Options, in rough
+  order of appetite: (a) a **small curated set** of common packages baked into the tree
+  as an offline fast-path; (b) a `catala package` command run on an opam box that emits
+  a relocatable overlay built against the bundle's **exact manifest** — the ABI/version
+  lock *is* the coherence contract. (A hosted build service is the same idea centralised,
+  but is idle musing for now.) Anything needing a real dependency solver or multiple
+  versions of a package is where opam stays the right answer.
+- **Toolchain/extension version handshake** — nothing currently checks that the extension
+  and the toolchain it drives are a matching pair, so a mismatch surfaces as a cryptic
+  downstream crash instead of "you're on the wrong switch." A version check on activation
+  (`catala --version` / the LSP's version vs. the extension's expected range) would attack
+  drift at the root — for native opam users as much as for bundle users.
 - **macOS / Linux** — out of scope here; use opam.
 
 (The release workflow now exists — `.github/workflows/publish.yml` promotes a
