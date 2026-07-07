@@ -616,12 +616,17 @@ set "TC=%BASE%\toolchain"
 set "OCAMLLIB=%TC%\lib\ocaml"
 set "NINJA_BIN=%TC%\bin\ninja.exe"
 if not defined CATALA_PLUGINS set "CATALA_PLUGINS=%TC%\lib\catala\plugins"
-set "LIBRARY_PATH=%TC%\x86_64-w64-mingw32\lib"
-:: Quote the -L path: unlike the path-style vars above (which tolerate spaces),
-:: FLEXLINKFLAGS is a flag string that flexlink re-tokenizes on spaces, so an
-:: install dir like "C:\Program Files\Catala" would otherwise split mid-path.
-set "FLEXLINKFLAGS=-L"%TC%\lib\ocaml\flexdll""
-set "PATH=%TC%\bin;%PATH%"
+:: Under a spaced install dir (e.g. C:\Program Files\Catala) gcc hands ld its
+:: startfile paths (default-manifest.o, crt2.o) UNQUOTED, so ld splits on the
+:: space ("ld: cannot find C:/Program"). Feed the gcc-facing vars the space-free
+:: 8.3 short path instead. No-op when the install dir has no space (the shipped
+:: ProgramData install stays byte-identical). Needs 8.3 names (on by default on C:).
+set "TCS=%TC%"
+echo "%TC%"|find " ">nul && for %%I in ("%TC%") do set "TCS=%%~sI"
+set "LIBRARY_PATH=%TCS%\x86_64-w64-mingw32\lib"
+:: FLEXLINKFLAGS is re-tokenized on spaces by flexlink; keep it quoted regardless.
+set "FLEXLINKFLAGS=-L"%TCS%\lib\ocaml\flexdll""
+set "PATH=%TCS%\bin;%TC%\bin;%PATH%"
 "%TC%\bin\$name.exe" %*
 exit /b %ERRORLEVEL%
 "@
