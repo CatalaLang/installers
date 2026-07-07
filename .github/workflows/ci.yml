@@ -36,9 +36,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: CatalaLang/catala
-          # Windows fixes not yet in master (drive-case relativization, file://
-          # URLs). Pinned to the fix branch until the PR lands; tip at pin time
-          # c32c7e079. catala-format needs no fix and stays on master.
+          # Windows fixes not yet in master; pinned to the fix branch until the PR
+          # lands (tip fd77fe966). catala-format needs no fix and stays on master.
           ref: ${{ inputs.catala_rev || 'clerk-windows-fixes' }}
           path: catala-src
 
@@ -87,8 +86,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: CatalaLang/catala-language-server
-          # Windows VS Code spawn/quoting fixes not yet in master; tip at pin
-          # time 7ede44d5. Pinned to the fix branch until the PR lands.
+          # Windows VS Code spawn/quoting fixes not yet in master; pinned to the
+          # fix branch until the PR lands (tip c743204).
           ref: ${{ inputs.catala_lsp_rev || 'fix/windows-vscode-spawn' }}
           path: catala-lsp-src
 
@@ -130,13 +129,28 @@ jobs:
           retention-days: 30
 
   bundle-windows-test:
-    name: Bundle (Windows) — test (clean install)
+    name: Bundle (Windows) — test (${{ matrix.install }} install)
     needs: bundle-windows-build
     if: needs.bundle-windows-build.result == 'success'
     runs-on: windows-latest
+    strategy:
+      # Don't let one install variant cancel the other — we want to see both.
+      fail-fast: false
+      matrix:
+        # default: shipped per-machine location (ProgramData, no spaces).
+        # spaced : force INSTALLFOLDER to a path with a space (Program Files).
+        install: [default, spaced]
     steps:
       - name: Checkout installers (for test files)
         uses: actions/checkout@v4
+
+      - name: Set up a JDK (for the Java backend)
+        # windows-latest ships a JDK, but pin one explicitly so `java`/`javac`/`jar`
+        # are deterministically on PATH for `clerk test --backend java`.
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
       - name: Download bundle artifact
         uses: actions/download-artifact@v4
@@ -148,11 +162,15 @@ jobs:
         run: |
           $msi = (Get-ChildItem bundle -Filter "catala-*.msi")[0]
           $log = "msi-install.log"
-          $p = Start-Process msiexec.exe -Wait -PassThru `
-                 -ArgumentList "/i `"$($msi.FullName)`" /qn /norestart /l*v `"$log`""
+          if ('${{ matrix.install }}' -eq 'spaced') {
+            $base = "C:\Program Files\Catala"
+            $args = "/i `"$($msi.FullName)`" INSTALLFOLDER=`"$base`" /qn /norestart /l*v `"$log`""
+          } else {
+            $base = "C:\ProgramData\Catala"
+            $args = "/i `"$($msi.FullName)`" /qn /norestart /l*v `"$log`""
+          }
+          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $args
           if ($p.ExitCode -ne 0) { Get-Content $log -Tail 60; throw "msiexec exited $($p.ExitCode)" }
-          # Per-machine install location.
-          $base = "C:\ProgramData\Catala"
           if (-not (Test-Path "$base\bin\catala.cmd")) { throw "Install incomplete: $base\bin\catala.cmd missing" }
           Add-Content -Path $env:GITHUB_PATH -Value "$base\bin"
 
@@ -205,6 +223,18 @@ jobs:
         working-directory: catala-examples
         run: clerk test allocations_familiales --backend=ocaml
 
+      - name: clerk test (C backend, allocations_familiales)
+        working-directory: catala-examples
+        run: clerk test allocations_familiales --backend=c
+
+      - name: clerk test (Java backend, allocations_familiales)
+        working-directory: catala-examples
+        run: clerk test allocations_familiales --backend=java
+
+      - name: clerk test (Python backend, allocations_familiales)
+        working-directory: catala-examples
+        run: clerk test allocations_familiales --backend=python
+
       - name: clerk test (ocaml backend, impot_revenu)
         working-directory: catala-examples
         run: clerk test impot_revenu --backend=ocaml
@@ -232,10 +262,11 @@ jobs:
 
       - name: Uninstall MSI
         run: |
+          $base = if ('${{ matrix.install }}' -eq 'spaced') { "C:\Program Files\Catala" } else { "C:\ProgramData\Catala" }
           $msi = (Get-ChildItem bundle -Filter "catala-*.msi")[0]
           $p = Start-Process msiexec.exe -Wait -PassThru `
                  -ArgumentList "/x `"$($msi.FullName)`" /qn /norestart"
           if ($p.ExitCode -ne 0) { throw "uninstall exited $($p.ExitCode)" }
-          if (Test-Path "C:\ProgramData\Catala\bin\catala.cmd") {
+          if (Test-Path "$base\bin\catala.cmd") {
             throw "Uninstall left files behind"
           }
