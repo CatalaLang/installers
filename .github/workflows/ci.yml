@@ -41,6 +41,25 @@ jobs:
           ref: ${{ inputs.catala_rev || 'clerk-windows-fixes' }}
           path: catala-src
 
+      - name: Exclude build tree from Windows Defender
+        # ocamlopt -shared assembles <plugin>.cmxs.startup.o then immediately hands
+        # it to the linker; under dune -j the six catala plugins link concurrently
+        # and Defender scanning a freshly-written .o can briefly lock it, so the
+        # linker intermittently sees "No such file" and the catala build fails at
+        # random (proven non-deterministic: same commit, green on re-run). Excluding
+        # the work tree (where the opam switch builds) shrinks that window.
+        # Runner-only + best-effort (never fail CI over it); ships in nothing.
+        shell: pwsh
+        run: |
+          foreach ($p in @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)) {
+            try {
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "Defender exclusion added: $p"
+            } catch {
+              Write-Host "Could not exclude $p (non-fatal): $_"
+            }
+          }
+
       - name: Set up OCaml
         uses: ocaml/setup-ocaml@v3
         with:
