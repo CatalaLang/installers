@@ -37,7 +37,7 @@ jobs:
         with:
           repository: CatalaLang/catala
           # Windows fixes not yet in master; pinned to the fix branch until the PR
-          # lands (tip fd77fe966). catala-format needs no fix and stays on master.
+          # lands. catala-format needs no fix and stays on master.
           ref: ${{ inputs.catala_rev || 'clerk-windows-fixes' }}
           path: catala-src
 
@@ -87,7 +87,7 @@ jobs:
         with:
           repository: CatalaLang/catala-language-server
           # Windows VS Code spawn/quoting fixes not yet in master; pinned to the
-          # fix branch until the PR lands (tip c743204).
+          # fix branch until the PR lands.
           ref: ${{ inputs.catala_lsp_rev || 'fix/windows-vscode-spawn' }}
           path: catala-lsp-src
 
