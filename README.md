@@ -93,4 +93,5 @@ These components are redistributed unmodified; source is available at
 <https://github.com/brechtsanders/winlibs_mingw>. The MinGW-w64 and GCC runtime
 support libraries (`libgcc*.a`, `libgmp.dll.a`, MinGW-w64 `.a` stubs) are licensed
 under permissive terms (ZLib, BSD-2, public domain, or the GCC Runtime Library
-Exception) and impose no GPL obligations on programs compiled with them.
+Exception). See `THIRD_PARTY_LICENSES` and the `licenses/` folder for the full
+list, versions, sources, and verbatim license texts.

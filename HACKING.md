@@ -90,7 +90,7 @@ Releases are **promoted from a vetted CI build**, not rebuilt — so the publish
    It downloads that run's exact MSI and attaches it to a GitHub release. Release
    assets never expire (unlike the 30-day artifact).
 
-**Versioning** (see `versioning.md`): the MSI ProductVersion is the **catala compiler
+**Versioning:** the MSI ProductVersion is the **catala compiler
 version** (users think "catala toolchain 1.x"); the filename carries the installer
 short-sha so two builds of one catala version are distinguishable; `manifest.json`
 inside the install is the source of truth for every component SHA. Installer-only

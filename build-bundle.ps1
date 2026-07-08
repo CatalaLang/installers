@@ -272,6 +272,28 @@ $version | Set-Content "$staging\version" -NoNewline
 $lspBranchOut = if ($lspRepo) { $lspBranch } else { $null }
 $lspShaOut    = if ($lspRepo) { $lspSha }    else { $null }
 $lspVsixOut   = if ($lspRepo) { "catala-$version.vsix" } else { $null }
+
+# Record the shipped GMP version in the manifest (parsed from gmp.h in the mingw
+# sys-root). GMP comes from opam's Cygwin root, not winlibs, so it is not
+# otherwise pinned here. Best-effort -- never fatal.
+$gmpVersion = "unknown"
+try {
+    $opamRootForGmp = (& opam var root 2>&1).Trim()
+    foreach ($d in @(
+        "$opamRootForGmp\.cygwin\root\usr\x86_64-w64-mingw32\sys-root\mingw\include",
+        "C:\msys64\mingw64\include",
+        "C:\cygwin64\usr\x86_64-w64-mingw32\sys-root\mingw\include")) {
+        $h = Join-Path $d "gmp.h"
+        if (Test-Path $h) {
+            $t = Get-Content $h -Raw
+            $mj = [regex]::Match($t, '__GNU_MP_VERSION\s+(\d+)').Groups[1].Value
+            $mn = [regex]::Match($t, '__GNU_MP_VERSION_MINOR\s+(\d+)').Groups[1].Value
+            $pl = [regex]::Match($t, '__GNU_MP_VERSION_PATCHLEVEL\s+(\d+)').Groups[1].Value
+            if ($mj) { $gmpVersion = "$mj.$mn.$pl"; break }
+        }
+    }
+} catch { }
+
 $buildManifest = [ordered]@{
     bundle_version         = $version
     built_at_utc           = (Get-Date).ToUniversalTime().ToString('o')
@@ -279,12 +301,24 @@ $buildManifest = [ordered]@{
     opam_packages          = $manifestComponents
     catala_language_server = [ordered]@{ branch = $lspBranchOut; sha = $lspShaOut; vsix = $lspVsixOut }
     winlibs_gcc            = $mingwGccVer
+    gmp                    = $gmpVersion
 }
 [System.IO.File]::WriteAllText(
     "$staging\manifest.json",
     ($buildManifest | ConvertTo-Json -Depth 6),
     (New-Object System.Text.UTF8Encoding($false)))
 ok "manifest.json"
+
+# Ship LICENSE.txt, THIRD_PARTY_LICENSES and the licenses\ texts into the install
+# tree. Placed at the staging root so WiX's <Files Include="**"> glob installs
+# them under INSTALLFOLDER (same as manifest.json above; no .wxs change).
+foreach ($f in @("LICENSE.txt", "THIRD_PARTY_LICENSES")) {
+    if (-not (Test-Path "$PSScriptRoot\$f")) { die "$f not found at repo root ($PSScriptRoot)" }
+    Copy-Item "$PSScriptRoot\$f" "$staging\$f"
+}
+if (-not (Test-Path "$PSScriptRoot\licenses")) { die "licenses\ folder not found at repo root" }
+Copy-Item "$PSScriptRoot\licenses" "$staging\licenses" -Recurse
+ok "licence files (LICENSE.txt, THIRD_PARTY_LICENSES, licenses\)"
 
 ###############################################################################
 # Toolchain binaries
@@ -436,19 +470,18 @@ foreach ($dll in @("libgmp-10.dll")) {
         die "$dll not found in any of: $($dllSearchDirs -join ', ')"
     }
 }
-# Import libraries (.dll.a) for the same DLLs -- needed by ld when compiling OCaml
-# executables (e.g. clerk test --backend=ocaml), which link zarith -> -lgmp.
-foreach ($lib in @("libgmp.dll.a", "libgmp.a")) {
-    $found = $false
-    foreach ($dir in $libSearchDirs) {
-        $src = Join-Path $dir $lib
-        if (Test-Path $src) {
-            Copy-Item $src "$staging\toolchain\x86_64-w64-mingw32\lib\"; ok "import lib: $lib"; $found = $true; break
-        }
+# libgmp import library for ld's -lgmp -- we link GMP dynamically against
+# libgmp-10.dll, so we ship only this import lib, not the static archive libgmp.a.
+$lib = "libgmp.dll.a"
+$found = $false
+foreach ($dir in $libSearchDirs) {
+    $src = Join-Path $dir $lib
+    if (Test-Path $src) {
+        Copy-Item $src "$staging\toolchain\x86_64-w64-mingw32\lib\"; ok "import lib: $lib"; $found = $true; break
     }
-    if ($lib -eq "libgmp.dll.a" -and -not $found) {
-        die "libgmp.dll.a not found in any of: $($libSearchDirs -join ', ') -- required for clerk test --backend=ocaml"
-    }
+}
+if (-not $found) {
+    die "libgmp.dll.a not found in any of: $($libSearchDirs -join ', ') -- required for clerk test --backend=ocaml"
 }
 # No opam-bin lib*.dll sweep: the native runtime is single-sourced from winlibs
 # (above) plus the explicit libgmp exception. The import-closure check at the end

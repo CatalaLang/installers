@@ -1,0 +1,46 @@
+THIRD-PARTY LICENSES
+====================
+
+This Windows bundle of the Catala toolchain redistributes the third-party
+components listed below, each under its own license. Verbatim copies of the
+license texts are in the "licenses" folder. Exact shipped versions of the
+opam-sourced components (including GMP) are recorded in manifest.json.
+
+Catala toolchain and this installer
+  Catala compiler, clerk, runtime, and installer
+  License: Apache-2.0        (licenses/Apache-2.0.txt)
+  Copyright: 2024-2026 Inria
+  Source:  https://github.com/CatalaLang/catala , https://github.com/CatalaLang/installers
+
+GCC and binutils
+  gcc.exe, as.exe, ld.exe, binutils, liblto_plugin.dll
+  Version: winlibs release 16.1.0 (GCC 16.1.0, MinGW-w64 msvcrt 14.0.0), redistributed unmodified
+  License: GPL-3.0-or-later   (licenses/GPL-3.0.txt)
+  Source:  https://ftp.gnu.org/gnu/gcc/ , https://ftp.gnu.org/gnu/binutils/ , https://winlibs.com/
+           (written source offer: see license.rtf)
+
+GCC runtime support libraries
+  libgcc_s_seh-1.dll and GCC runtime objects
+  License: GCC Runtime Library Exception (accompanies GPL-3.0)
+  Source:  same as GCC above
+
+GNU Multiple Precision Arithmetic Library (GMP)
+  libgmp-10.dll (linked dynamically), import lib libgmp.dll.a
+  Version: see manifest.json (sourced from opam's Cygwin root)
+  License: LGPL-3.0-or-later  (licenses/LGPL-3.0.txt)
+  Source:  https://gmplib.org/
+
+MinGW-w64 runtime
+  libwinpthread-1.dll, mingw-w64 runtime and import libs
+  License: permissive (ZLib / BSD-2 / public domain)
+  Source:  https://www.mingw-w64.org/ , https://github.com/brechtsanders/winlibs_mingw
+
+flexdll
+  flexlink.exe, flexdll_*.o support objects
+  License: zlib/libpng       (licenses/zlib.txt)
+  Copyright: Alain Frisch / LexiFi
+  Source:  https://github.com/alainfrisch/flexdll
+
+Catala OCaml runtime dependencies
+  zarith     License: LGPL-2.1 with a static-linking exception   Source: https://github.com/ocaml/Zarith
+  dates_calc License: Apache-2.0                                  Source: https://github.com/CatalaLang/dates-calc
