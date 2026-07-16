@@ -1,0 +1,19 @@
+# Build scaffolding the CI bundle build (build-bundle.ps1 + setup-ocaml)
+# creates *inside* this checkout. Ignored so the installer's own dirty check
+# (git -C . status --porcelain) stays clean and the MSI is not tagged -dirty.
+
+# opam local switch (ocaml/setup-ocaml)
+/_opam/
+
+# Source repos checked out here (actions/checkout `path:`)
+/catala-src/
+/catala-format-src/
+/catala-lsp-src/
+
+# Bundle build output, and the artifact the test job downloads
+/_bundle/
+/bundle/
+
+# opam switch cache tarball (setup-ocaml post step)
+/cache.tzst
+/manifest.txt
