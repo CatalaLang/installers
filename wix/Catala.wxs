@@ -63,10 +63,11 @@
       Compressed="yes"
       InstallerVersion="500">
 
-    <!-- Block downgrades; allow same-version repair and newer-version upgrade. -->
-    <MajorUpgrade
-        AllowSameVersionUpgrades="yes"
-        DowngradeErrorMessage="A newer version of Catala is already installed." />
+    <!-- Allow any version to replace any other: upgrade, downgrade, and
+         same-version reinstall all just remove the existing product and install
+         this one. (AllowDowngrades is incompatible with AllowSameVersionUpgrades
+         and DowngradeErrorMessage, which it subsumes.) -->
+    <MajorUpgrade AllowDowngrades="yes" />
 
     <MediaTemplate EmbedCab="yes" />
 
