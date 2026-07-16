@@ -141,7 +141,9 @@ foreach ($pkg in @("catala", "catala-lsp", "catala-format")) {
             if ($srcDir -and (Test-Path (Join-Path $srcDir '.git'))) {
                 $sha = (& git -C $srcDir rev-parse --short HEAD 2>$null | Out-String).Trim()
                 if ($sha) {
-                    if (& git -C $srcDir status --porcelain 2>$null) { $sha = "$sha-dirty" }
+                    # Only tracked-file modifications count as dirty; untracked
+                    # build scaffolding (opam switch, sub-checkouts, output) does not.
+                    if (& git -C $srcDir status --porcelain --untracked-files=no 2>$null) { $sha = "$sha-dirty" }
                     $prov = "$prov @ $sha"
                 }
             } elseif ($target -match '#([0-9a-fA-F]{7,40})') {
@@ -160,7 +162,9 @@ foreach ($pkg in @("catala", "catala-lsp", "catala-format")) {
 $installerSha = $null
 try {
     $installerSha = (& git -C $PSScriptRoot rev-parse --short HEAD 2>$null | Out-String).Trim()
-    if ($installerSha -and (& git -C $PSScriptRoot status --porcelain 2>$null)) {
+    # Tracked-file modifications only; the build litters this checkout with
+    # untracked scaffolding (_opam, sub-checkouts, _bundle) that isn't "dirty".
+    if ($installerSha -and (& git -C $PSScriptRoot status --porcelain --untracked-files=no 2>$null)) {
         $installerSha = "$installerSha-dirty"
     }
 } catch {}
