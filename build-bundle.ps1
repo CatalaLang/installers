@@ -127,11 +127,11 @@ $manifestComponents = [ordered]@{}
 foreach ($pkg in @("catala", "catala-lsp", "catala-format")) {
     $ver = "?"; $prov = "(not pinned)"; $sha = $null
     try {
-        $v = (& opam show $pkg --field=version 2>$null | Out-String).Trim()
+        $v = (& opam show $pkg --field=version --color=never 2>$null | Out-String).Trim()
         if ($v) { $ver = $v }
     } catch {}
     try {
-        $pinLine = (& opam pin list 2>$null |
+        $pinLine = (& opam pin list --color=never 2>$null |
                     Where-Object { $_ -match "^$([regex]::Escape($pkg))\.\S" } |
                     Select-Object -First 1)
         if ($pinLine -and ($pinLine -match '^\S+\s+(\S+)\s+(.+?)\s*$')) {
