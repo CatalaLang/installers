@@ -932,11 +932,10 @@ if (-not $msiVersion) { die "Could not derive a numeric MSI version from '$versi
 
 info "Building MSI (WiX) version $msiVersion"
 New-Item -ItemType Directory -Force $OutputDir | Out-Null
-# The MSI filename carries the installer short-sha so two builds of the same
-# catala version (e.g. installer-only fixes) are physically distinguishable.
-# The ProductVersion stays the catala version; the sha is a filename-only handle
-# (also recorded in manifest.json). Staging dir name is left unchanged.
-$msiName = if ($installerSha) { "$bundleName-$installerSha" } else { $bundleName }
+# catala-sha in the name (installer-sha is unchanged by catala-only rebuilds);
+# "-unsigned" = the sign job's input, dropped on its signed output.
+$catalaSha = $manifestComponents["catala"].sha
+$msiName = if ($catalaSha) { "$bundleName-$catalaSha-unsigned" } else { "$bundleName-unsigned" }
 $msiPath = Join-Path (Resolve-Path $OutputDir) "$msiName.msi"
 Remove-Item $msiPath -ErrorAction SilentlyContinue
 

@@ -11,8 +11,8 @@ on:
         description: CI run id whose bundle-windows artifact to publish
         required: true
       tag:
-        description: Release tag, e.g. catala-1.2.0-alpha1 (the -alphaN lives here, not in the MSI version)
-        required: true
+        description: 'Blank = testing pre-release (auto: windows-testing-YYYY.MM.DD-<catala-sha>). Real release: pass v<opam-version>, e.g. v1.2.1 (validated against the bundled version)'
+        required: false
       prerelease:
         description: Mark as pre-release (soft release, not flagged "Latest")
         type: boolean
@@ -44,12 +44,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # version + catala-sha from the MSI name (catala-<ver>-windows-x86_64-<sha>[-unsigned].msi)
+          MSI=$(basename "$(ls out/catala-*.msi | head -1)")
+          VER=${MSI#catala-}; VER=${VER%%-windows-x86_64-*}
+          SHA=${MSI##*-x86_64-}; SHA=${SHA%-unsigned.msi}; SHA=${SHA%.msi}
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="windows-testing-$(date -u +%Y.%m.%d)-$SHA"
+          else
+            case "$TAG" in
+              v*)
+                # real release: tag version must match the bundle
+                if [ "${TAG#v}" != "$VER" ]; then
+                  echo "::error::release tag $TAG does not match bundled catala version $VER (from $MSI)"
+                  exit 1
+                fi ;;
+            esac
+          fi
+          echo "Publishing tag: $TAG  (bundled catala $VER, sha $SHA)"
           flags=""
           [ "${{ inputs.prerelease }}" = "true" ] && flags="$flags --prerelease"
           [ "${{ inputs.draft }}" = "true" ] && flags="$flags --draft"
-          gh release create "${{ inputs.tag }}" \
+          gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             $flags \
-            --title "Catala Windows installer — ${{ inputs.tag }}" \
+            --title "Catala Windows installer — $TAG" \
             --notes "Windows alpha installer, promoted from CI run ${{ inputs.run_id }}. Exact component SHAs are in \`manifest.json\` inside the install." \
             out/catala-*.msi out/catala-*.msi.sha256
