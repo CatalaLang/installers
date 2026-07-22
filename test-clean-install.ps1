@@ -4,28 +4,20 @@
   Validate the Catala Windows MSI on a clean install (no opam in PATH).
 
 .DESCRIPTION
-  1. Moves the opam root to a timestamped backup dir (NOT deleted -- rollback is possible).
-  2. Scrubs opam/dot entries from the session PATH and verifies no catala/ocaml
-     tool leaks in from elsewhere.
-  3. Installs the given MSI per-user via msiexec (silent).
-  4. Asserts every tool resolves to the *installed* location, then runs the full
-     test suite against catala-examples.
-  5. Uninstalls.
-
-  To roll back the opam move after the test:
-    Move-Item "$env:LOCALAPPDATA\opam.bak.<timestamp>" "$env:LOCALAPPDATA\opam"
+  Backs up the opam root, scrubs PATH, installs the MSI, asserts tools resolve
+  to the install, runs the catala-examples suite, uninstalls.
 
 .PARAMETER Msi
   Path to the catala-*.msi to install and test. Required.
 
 .PARAMETER CatalaExamples
-  Path to an existing catala-examples checkout. If omitted, clones from GitHub.
+  Existing catala-examples checkout; cloned from GitHub if omitted.
 
 .PARAMETER SkipSlowTests
-  Skip the impot_revenu and us_tax_code OCaml backend tests (faster iteration).
+  Skip the impot_revenu and us_tax_code OCaml backend tests.
 
 .PARAMETER KeepInstalled
-  Do not uninstall at the end (leave the install in place for manual poking).
+  Do not uninstall at the end.
 #>
 param(
     [Parameter(Mandatory)][string]$Msi,
@@ -42,11 +34,14 @@ function ok([string]$msg)   { Write-Host "    ok: $msg" -ForegroundColor Green }
 function warn([string]$msg) { Write-Host "  warn: $msg" -ForegroundColor Yellow }
 function die([string]$msg)  { Write-Host " error: $msg" -ForegroundColor Red; exit 1 }
 
-$base    = "$env:LOCALAPPDATA\Programs\Catala"
+# Resolved after install: perMachine MSIs land in ProgramData, perUser ones in
+# LOCALAPPDATA\Programs.
+$baseCandidates = @("$env:ProgramData\Catala", "$env:LOCALAPPDATA\Programs\Catala")
+$base = $baseCandidates[0]
 $msiAbs  = (Resolve-Path $Msi).Path
 
 ###############################################################################
-# 1. Move opam root out of the way (NOT deleted -- rollback is possible)
+# 1. Move opam root aside (backed up, not deleted -- rollback possible)
 ###############################################################################
 
 $opamRoot   = "$env:LOCALAPPDATA\opam"
@@ -61,8 +56,7 @@ if (Test-Path $opamRoot) {
     warn "No opam root at $opamRoot -- nothing to move"
 }
 
-# Scrub opam-injected entries from the current session PATH only (registry PATH
-# is untouched), so anything we resolve later must come from the MSI install.
+# Scrub session PATH only (registry PATH untouched) so tools must come from the MSI.
 $env:PATH = ($env:PATH -split ';' |
     Where-Object { $_ -notmatch '\\opam\\' -and $_ -notmatch '\\\.' }) -join ';'
 
@@ -86,7 +80,7 @@ if ($leaked) {
 }
 
 ###############################################################################
-# 3. Install the MSI (per-user, silent). msiexec major-upgrades any prior install.
+# 3. Install the MSI (per-user, silent)
 ###############################################################################
 
 info "Installing MSI: $msiAbs"
@@ -97,11 +91,11 @@ if ($p.ExitCode -ne 0) {
     Get-Content $log -Tail 60
     die "msiexec /i exited $($p.ExitCode) (full log: $log)"
 }
-if (-not (Test-Path "$base\bin\catala.cmd")) { die "Install incomplete: $base\bin\catala.cmd missing" }
+$base = $baseCandidates | Where-Object { Test-Path "$_\bin\catala.cmd" } | Select-Object -First 1
+if (-not $base) { die "Install incomplete: bin\catala.cmd missing from $($baseCandidates -join ' and ')" }
 ok "Installed to $base"
 
-# Wire the install's bin\ into this session. The .cmd wrappers set everything
-# else (CATALA_OCAML_LIBDIR / OCAMLLIB / NINJA_BIN / ...) themselves.
+# Only bin\ is needed; the .cmd wrappers set CATALA_OCAML_LIBDIR / OCAMLLIB / etc.
 $env:PATH = "$base\bin;$env:PATH"
 
 ###############################################################################
@@ -128,7 +122,7 @@ if ($resolveFailed) { die "A tool did not resolve to the installed bundle -- abo
 
 info "Smoke test"
 catala --version
-# Check the testcase plugin is present via catala --help (which lists plugins).
+# catala --help lists plugins; testcase must be among them.
 $catalaHelp = & catala --help 2>&1 | Out-String
 if ($catalaHelp -notmatch "testcase") { die "testcase plugin missing from bundle (not listed in catala --help)" }
 ok "catala testcase plugin OK"
