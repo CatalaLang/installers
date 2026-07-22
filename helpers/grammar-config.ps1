@@ -34,6 +34,8 @@ foreach ($lang in $langs) {
 $lines[-1] = $lines[-1].TrimEnd(',')   # no trailing comma on the last entry
 $lines += @('  }', '}')
 
-# -Force: catala.ncl is shipped read-only (copied from the opam switch).
-Set-Content -Path $nclPath -Value $lines -Encoding ascii -Force
+# UTF-8 no BOM: PS5.1 Set-Content is lossy on non-ASCII install paths (ascii/ANSI)
+# and -Encoding UTF8 adds a BOM. Shipped catala.ncl is read-only -- clear it first.
+if (Test-Path $nclPath) { (Get-Item $nclPath).IsReadOnly = $false }
+[System.IO.File]::WriteAllLines($nclPath, [string[]]$lines, (New-Object System.Text.UTF8Encoding $false))
 Write-Host "grammar-config: wrote $nclPath -> $gdir"
