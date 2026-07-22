@@ -141,7 +141,7 @@ jobs:
       # don't let one install variant cancel the other
       fail-fast: false
       matrix:
-        # default: ProgramData (no spaces); spaced: Program Files (space in path)
+        # default: ProgramData (no spaces); spaced: space + accents in path
         install: [default, spaced]
     steps:
       - name: Checkout installers (for test files)
@@ -165,7 +165,8 @@ jobs:
           $msi = (Get-ChildItem bundle -Filter "catala-*.msi")[0]
           $log = "msi-install.log"
           if ('${{ matrix.install }}' -eq 'spaced') {
-            $base = "C:\Program Files\Catala"
+            # "Catala accentué" -- accent via [char] keeps the YAML ASCII-safe
+            $base = "C:\Program Files\Catala accentu$([char]0x00E9)"
             $args = "/i `"$($msi.FullName)`" INSTALLFOLDER=`"$base`" /qn /norestart /l*v `"$log`""
           } else {
             $base = "C:\ProgramData\Catala"
@@ -218,6 +219,15 @@ jobs:
       - name: clerk test (interpret, allocations_familiales)
         working-directory: catala-examples
         run: clerk test allocations_familiales
+
+      - name: clerk test (interpret, accented+spaced project dir)
+        run: |
+          $dst = "exemples accentu$([char]0x00E9)s"
+          robocopy catala-examples $dst /E /XD _build /NFL /NDL /NJH /NJS /NP | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "robocopy exited $LASTEXITCODE" }
+          Set-Location $dst
+          clerk test allocations_familiales
+          if ($LASTEXITCODE -ne 0) { throw "clerk test exited $LASTEXITCODE" }
 
       - name: clerk test (ocaml backend, allocations_familiales)
         working-directory: catala-examples
