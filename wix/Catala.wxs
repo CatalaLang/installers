@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  WiX v5 authoring for the Catala Windows MSI.
-
-  Build (on a Windows machine with the WiX dotnet tool installed):
+  WiX v5 authoring for the Catala Windows MSI. See DESIGN.md.
+  Required preprocessor vars: -d Version=<3/4-part MSI ProductVersion>
+  and -d StageDir=<tree from build-bundle.ps1, harvested into the install folder>.
 
     wix build wix\Catala.wxs `
       -ext WixToolset.Util.wixext `
@@ -11,46 +11,30 @@
       -d StageDir=_bundle\stage\catala-0.11.0-windows-x86_64 `
       -arch x64 `
       -o _bundle\catala-0.11.0-windows-x86_64.msi
-
-  Two preprocessor variables are required:
-    Version   - 3- or 4-part numeric MSI ProductVersion (e.g. 0.11.0)
-    StageDir  - the staging tree assembled by build-bundle.ps1; its contents
-                (bin\ and toolchain\) are harvested into the install folder.
-
-  Design choices (see DESIGN.md):
-    - perUser scope: installs to %LOCALAPPDATA%\Programs\Catala with NO admin /
-      no UAC. IT can push per-machine by building with -d Scope=perMachine and
-      running elevated (msiexec ALLUSERS=1 /qn); a follow-up variant.
-    - PATH: the install's bin\ is added to the *user* PATH (HKCU).
-    - Defender exclusions are an opt-in, self-elevating extra (TUNE_DEFENDER=1),
-      never required for install to succeed. See defender.ps1.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
-  <!-- The opt-in Defender custom action can be compiled out (-d Defender=0) to
-       validate the core MSI independently of the Util extension CA binary. -->
+  <!-- -d Defender=0 compiles out the Defender CA to validate the MSI without the Util extension. -->
   <?ifndef Defender ?>
   <?define Defender = "1" ?>
   <?endif?>
 
-  <!-- Install scope. Default perMachine (C:\ProgramData\Catala, elevated, system
-       PATH/HKLM) — the shipped variant. Build with -d Scope=perUser for a no-admin
-       per-user install (%LOCALAPPDATA%, user PATH/HKCU). ProgramData (not Program
-       Files) keeps the path space-free for clerk's not-yet-space-hardened rules. -->
+  <!-- Default perMachine (ProgramData/HKLM); -d Scope=perUser for no-admin install
+       (LOCALAPPDATA/HKCU). ProgramData is space-free for clerk's not-yet-hardened rules. -->
   <?ifndef Scope ?>
   <?define Scope = "perMachine" ?>
   <?endif?>
   <?if $(var.Scope) = "perMachine" ?>
   <?define RegRoot = "HKLM" ?>
   <?define EnvSystem = "yes" ?>
-  <!-- Deferred CAs run in the system (elevated) context to write under ProgramData. -->
+  <!-- deferred CAs run elevated to write under ProgramData -->
   <?define DeferredImpersonate = "no" ?>
   <?else?>
   <?define RegRoot = "HKCU" ?>
   <?define EnvSystem = "no" ?>
-  <!-- Per-user install isn't elevated; deferred CAs run as the user (writes LOCALAPPDATA). -->
+  <!-- per-user isn't elevated; deferred CAs run as the user -->
   <?define DeferredImpersonate = "yes" ?>
   <?endif?>
 
@@ -63,38 +47,28 @@
       Compressed="yes"
       InstallerVersion="500">
 
-    <!-- Allow any version to replace any other: upgrade, downgrade, and
-         same-version reinstall all just remove the existing product and install
-         this one. (AllowDowngrades is incompatible with AllowSameVersionUpgrades
-         and DowngradeErrorMessage, which it subsumes.) -->
+    <!-- AllowDowngrades: any version replaces any other. Subsumes (and is
+         incompatible with) AllowSameVersionUpgrades / DowngradeErrorMessage. -->
     <MajorUpgrade AllowDowngrades="yes" />
 
     <MediaTemplate EmbedCab="yes" />
 
     <Property Id="ARPURLINFOABOUT" Value="https://catala-lang.org" />
 
-    <!-- VS Code extension is offered as an optional, default-on FEATURE (the
-         "VSCodeExt" feature below) so WixUI_FeatureTree renders it as a native
-         check box — no fragile custom-dialog authoring. Ticking it installs a
-         Start-Menu shortcut to install-vscode-extension.cmd, which the user runs
-         in their own shell (a per-machine MSI runs as SYSTEM, but VS Code
-         extensions install per-user). Graceful degradation lives in the .cmd: it
-         does `where code` and prints "install VS Code first" rather than failing
-         when VS Code is absent, so leaving it ticked is harmless either way. -->
+    <!-- VS Code extension = optional default-on FEATURE (VSCodeExt below) so
+         WixUI_FeatureTree renders a native checkbox instead of custom-dialog
+         authoring. Shortcut runs per-user (a perMachine MSI is SYSTEM, but VS Code
+         extensions are per-user); the .cmd degrades gracefully if VS Code is absent. -->
 
 
     <?if $(var.Scope) = "perMachine" ?>
-    <!-- C:\ProgramData\Catala (per-machine, elevated). CommonAppDataFolder is
-         the machine-wide standard location WiX can auto-GUID. It is also
-         space-free: clerk now quotes exe paths in its ninja commands (catala
-         dbdfcb442, validated on a "C:\sp ace" install), but a few include-dir
-         paths may still be unquoted, so a space-free root remains the safe
-         default until that hardening lands. -->
+    <!-- C:\ProgramData\Catala. Space-free root stays the safe default: clerk quotes
+         exe paths (catala dbdfcb442) but some include-dir paths may still be unquoted. -->
     <StandardDirectory Id="CommonAppDataFolder">
       <Directory Id="INSTALLFOLDER" Name="Catala" />
     </StandardDirectory>
     <?else?>
-    <!-- %LOCALAPPDATA%\Programs\Catala (per-user, no admin). -->
+    <!-- %LOCALAPPDATA%\Programs\Catala (per-user) -->
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="ProgramsFolder" Name="Programs">
         <Directory Id="INSTALLFOLDER" Name="Catala" />
@@ -102,7 +76,7 @@
     </StandardDirectory>
     <?endif?>
 
-    <!-- Start-Menu folder for the (optional) VS Code extension installer shortcut. -->
+    <!-- Start-Menu folder for the optional VS Code extension shortcut -->
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="CatalaMenuFolder" Name="Catala" />
     </StandardDirectory>
@@ -117,20 +91,15 @@
       <?endif?>
     </Feature>
 
-    <!-- Optional, default-on. WixUI_FeatureTree shows this as a check box the
-         user can untick. Ticked: install the extension into VS Code now AND drop
-         a Start-Menu shortcut to reinstall it later. Unticked: neither. -->
+    <!-- Optional, default-on checkbox. Ticked: install extension now + Start-Menu
+         reinstall shortcut. Unticked: neither. -->
     <Feature Id="VSCodeExt" Level="1" Title="VS Code extension"
              Description="Installs the Catala extension into VS Code now (and adds a Start-Menu shortcut to reinstall it later). Requires VS Code; skipped harmlessly if VS Code is not installed."
              AllowAdvertise="no">
       <ComponentRef Id="VSCodeExtShortcut" />
     </Feature>
 
-    <!--
-      Harvest the whole staging tree. The WiX v4/v5 <Files> element globs the
-      directory and auto-generates one component per file, mirroring the
-      subdirectory structure (bin\, toolchain\...) under INSTALLFOLDER.
-    -->
+    <!-- <Files> globs the staging tree, one auto-component per file, mirroring its structure under INSTALLFOLDER. -->
     <ComponentGroup Id="ToolchainFiles" Directory="INSTALLFOLDER">
       <Files Include="$(var.StageDir)\**" />
     </ComponentGroup>
