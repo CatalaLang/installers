@@ -16,7 +16,7 @@ on:
         required: false
       catala_lsp_rev:
         description: catala-language-server git ref (branch, tag, or SHA)
-        default: fix/windows-vscode-spawn
+        default: master
         required: false
 
 env:
@@ -95,8 +95,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: CatalaLang/catala-language-server
-          # pinned to fix branch until Windows VS Code spawn fixes land in master
-          ref: ${{ inputs.catala_lsp_rev || 'fix/windows-vscode-spawn' }}
+          ref: ${{ inputs.catala_lsp_rev || 'master' }}
           path: catala-lsp-src
 
       - name: Install catala-format and catala-lsp

@@ -26,7 +26,7 @@ param(
     [string]$OutputDir  = "_bundle",
     [string]$MingwZip   = "",   # path to pre-downloaded winlibs zip (skips download)
     [string]$LspPath    = "",   # path to catala-language-server checkout (build VSIX from source)
-    [string]$LspRef     = "fix/windows-vscode-spawn",  # TODO: reset to "master" once shell:true fix merges
+    [string]$LspRef     = "master",
     [ValidateSet("perUser","perMachine")]
     [string]$Scope      = "perMachine"  # perMachine -> C:\ProgramData\Catala (shipped: IT-deployable, space-free); perUser -> %LOCALAPPDATA% (no admin)
 )
