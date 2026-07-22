@@ -1,0 +1,12 @@
+@echo off
+:: Instantiated by build-bundle.ps1 (@X@ placeholders); %1 = grammar language.
+:: Runs topiary once to make it fetch+compile the tree-sitter grammar; any
+:: input triggers this, a parse error on the empty line is harmless.
+:: PATH/CC/CXX changes stay in this child process; stderr is swallowed here
+:: because git's clone chatter would be a terminating NativeCommandError in
+:: the parent PowerShell under 'Stop'. The caller gates on the produced .dll.
+set "PATH=@CYGBIN@;%PATH%"
+set "CC=@CYGBIN@\x86_64-w64-mingw32-gcc.exe"
+set "CXX=@CYGBIN@\x86_64-w64-mingw32-g++.exe"
+echo.| "@TOPIARY@" format -C "@NCL@" -l %1 -q "@SCM@" >nul 2>&1
+exit /b 0

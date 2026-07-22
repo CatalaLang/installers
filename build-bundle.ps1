@@ -59,11 +59,8 @@ $versionLine = (Get-Content "catala.opam" | Select-String '^version:' | Select-O
 $version = [regex]::Match($versionLine, '"([^"]+)"').Groups[1].Value
 if (-not $version) { die "Could not read version from catala.opam" }
 
-# Prefer the real ninja binary over shim wrappers.
-# On Windows, both Chocolatey and opam install a .NET shim in their bin\ directory
-# that looks for the real binary at ..\lib\ninja\tools\ninja.exe relative to the shim.
-# Copying the shim into a different location breaks that relative lookup.
-# The real binary lives in the lib\ tree; probe those locations first.
+# Prefer the real ninja in lib\: Chocolatey/opam bin\ ninja is a .NET shim whose
+# relative lookup of ..\lib\ninja\tools\ninja.exe breaks if copied elsewhere.
 $ninja = $null
 foreach ($candidate in @(
     "$opamPrefix\lib\ninja\tools\ninja.exe",
@@ -90,8 +87,7 @@ ok "ninja: $ninja"
 # External component versions -- bump the URL here when upgrading MinGW-w64
 ###############################################################################
 
-# Single canonical source: update only this URL when upgrading the toolchain.
-# $mingwGccVer is parsed from it (used for lib/gcc/<arch>/<ver>/ paths inside the zip).
+# Canonical source; $mingwGccVer is parsed from it (for lib/gcc/<arch>/<ver>/ paths).
 $mingwMsvcrtUrl = "https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0posix-14.0.0-msvcrt-r3/winlibs-x86_64-posix-seh-gcc-16.1.0-mingw-w64msvcrt-14.0.0-r3.zip"
 $mingwGccVer = [regex]::Match($mingwMsvcrtUrl, '-gcc-(\d+\.\d+\.\d+)-').Groups[1].Value
 if (-not $mingwGccVer) { die "Could not parse GCC version from mingw URL: $mingwMsvcrtUrl" }
@@ -117,10 +113,8 @@ if (-not (Test-Path "$opamPrefix\bin\catala-format.exe") -and -not (Test-Path "$
 ok "catala-format"
 
 ###############################################################################
-# Inputs report -- make explicit what this build harvests. The bundle is
-# assembled from one opam switch; this prints each source package's version and
-# provenance (opam pin source, plus the git SHA when the pin is a local
-# checkout), and the pinned winlibs gcc. Informational only -- never fatal.
+# Inputs report: per-package version + provenance (pin, git SHA) + winlibs gcc,
+# all from the one opam switch. Informational only -- never fatal.
 ###############################################################################
 info "Build inputs (harvested from opam switch $opamPrefix):"
 $manifestComponents = [ordered]@{}
@@ -141,14 +135,12 @@ foreach ($pkg in @("catala", "catala-lsp", "catala-format")) {
             if ($srcDir -and (Test-Path (Join-Path $srcDir '.git'))) {
                 $sha = (& git -C $srcDir rev-parse --short HEAD 2>$null | Out-String).Trim()
                 if ($sha) {
-                    # Only tracked-file modifications count as dirty; untracked
-                    # build scaffolding (opam switch, sub-checkouts, output) does not.
+                    # Dirty = tracked changes only; untracked build scaffolding doesn't count.
                     if (& git -C $srcDir status --porcelain --untracked-files=no 2>$null) { $sha = "$sha-dirty" }
                     $prov = "$prov @ $sha"
                 }
             } elseif ($target -match '#([0-9a-fA-F]{7,40})') {
-                # Pinned to an explicit git SHA (CI/release builds) rather than a
-                # local checkout: take the SHA straight from the pin target.
+                # Pinned to an explicit SHA (CI/release): take it from the pin target.
                 $sha = $Matches[1]
                 $prov = "$prov @ $sha"
             }
@@ -162,8 +154,7 @@ foreach ($pkg in @("catala", "catala-lsp", "catala-format")) {
 $installerSha = $null
 try {
     $installerSha = (& git -C $PSScriptRoot rev-parse --short HEAD 2>$null | Out-String).Trim()
-    # Tracked-file modifications only; the build litters this checkout with
-    # untracked scaffolding (_opam, sub-checkouts, _bundle) that isn't "dirty".
+    # Dirty = tracked changes only; build scaffolding (_opam, _bundle) isn't.
     if ($installerSha -and (& git -C $PSScriptRoot status --porcelain --untracked-files=no 2>$null)) {
         $installerSha = "$installerSha-dirty"
     }
@@ -269,17 +260,14 @@ Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
 
 $version | Set-Content "$staging\version" -NoNewline
 
-# Build manifest: records exactly what went into this bundle so an alpha tester
-# can report their build (`type "%ProgramData%\Catala\manifest.json"`) and we can
-# reproduce it. Written at the staging root, so WiX's <Files Include="**"> glob
-# installs it at INSTALLFOLDER\manifest.json automatically (no .wxs change).
+# Build manifest: records what went into the bundle so testers can report it. At the
+# staging root so WiX's <Files Include="**"> glob installs it (no .wxs change).
 $lspBranchOut = if ($lspRepo) { $lspBranch } else { $null }
 $lspShaOut    = if ($lspRepo) { $lspSha }    else { $null }
 $lspVsixOut   = if ($lspRepo) { "catala-$version.vsix" } else { $null }
 
-# Record the shipped GMP version in the manifest (parsed from gmp.h in the mingw
-# sys-root). GMP comes from opam's Cygwin root, not winlibs, so it is not
-# otherwise pinned here. Best-effort -- never fatal.
+# GMP version from gmp.h: GMP comes from opam's Cygwin root, not winlibs, so it's
+# otherwise unpinned here. Best-effort -- never fatal.
 $gmpVersion = "unknown"
 try {
     $opamRootForGmp = (& opam var root 2>&1).Trim()
@@ -313,9 +301,8 @@ $buildManifest = [ordered]@{
     (New-Object System.Text.UTF8Encoding($false)))
 ok "manifest.json"
 
-# Ship LICENSE.txt, THIRD_PARTY_LICENSES and the licenses\ texts into the install
-# tree. Placed at the staging root so WiX's <Files Include="**"> glob installs
-# them under INSTALLFOLDER (same as manifest.json above; no .wxs change).
+# License texts at the staging root so WiX's <Files Include="**"> glob installs them
+# under INSTALLFOLDER (no .wxs change).
 foreach ($f in @("LICENSE.txt", "THIRD_PARTY_LICENSES")) {
     if (-not (Test-Path "$PSScriptRoot\$f")) { die "$f not found at repo root ($PSScriptRoot)" }
     Copy-Item "$PSScriptRoot\$f" "$staging\$f"
@@ -336,9 +323,8 @@ foreach ($b in @("catala", "clerk", "ocamlopt", "ocamlc")) {
     ok "$b.exe"
 }
 Copy-Item $ninja "$staging\toolchain\bin\ninja.exe"; ok "ninja.exe"
-# flexlink: linker tool for ocamlopt -shared.
-# With flexdll 0.43+ (OCaml 5.x), the runtime is .o files in lib/ocaml/flexdll/,
-# not a separate DLL -- those are copied as part of the OCaml stdlib below.
+# flexlink: for ocamlopt -shared. flexdll 0.43+ (OCaml 5.x) ships its runtime as .o
+# files in lib/ocaml/flexdll/ (copied with the stdlib below), not a separate DLL.
 $flexlink = "$opamPrefix\bin\flexlink.exe"
 if (Test-Path $flexlink) {
     Copy-Item $flexlink "$staging\toolchain\bin\flexlink.exe"; ok "flexlink.exe"
@@ -351,8 +337,7 @@ foreach ($obj in @("flexdll_initer_mingw64.o", "flexdll_mingw64.o")) {
 foreach ($b in @("catala-lsp", "catala-dap")) {
     Copy-Item "$opamPrefix\bin\$b.exe" "$staging\toolchain\bin\$b.exe"; ok "$b.exe"
 }
-# catala-format: opam installs the OCaml binary as "catala-format" (no .exe on Cygwin);
-# look for both catala-format.exe and catala-format (the latter is the actual OCaml PE).
+# opam may install catala-format without .exe on Cygwin; the extensionless one is the PE.
 $catalaFormatBin = if (Test-Path "$opamPrefix\bin\catala-format.exe") { "$opamPrefix\bin\catala-format.exe" }
                    elseif (Test-Path "$opamPrefix\bin\catala-format")  { "$opamPrefix\bin\catala-format" }
                    else { $null }
@@ -413,29 +398,26 @@ $rev = ([regex]::Match((Get-Content $gitNcl -Raw), 'rev\s*=\s*"([0-9a-fA-F]+)"')
 if (-not $rev) { die "could not read grammar rev from $gitNcl" }
 $tcache = "$env:LOCALAPPDATA\topiary\cache"
 $langs  = @("catala_en", "catala_fr", "catala_pl")
+# Compiler env (PATH/CC/CXX) and the stderr redirect live in a child cmd
+# instantiated from helpers\grammar-prebuild.cmd.in: the parent env is never
+# mutated, and stderr chatter is swallowed child-side (see the template).
+$grammarTpl = Join-Path $PSScriptRoot "helpers\grammar-prebuild.cmd.in"
+if (-not (Test-Path $grammarTpl)) { die "wrapper source missing: helpers\grammar-prebuild.cmd.in" }
+$grammarBat = Join-Path $env:TEMP "catala-grammar-prebuild.cmd"
+$grammarCmd = (Get-Content -Raw $grammarTpl).Replace('@CYGBIN@', $cygBin)
+$grammarCmd = $grammarCmd.Replace('@TOPIARY@', $stagedTopiary).Replace('@NCL@', $gitNcl).Replace('@SCM@', $scm)
+$grammarCmd | Set-Content $grammarBat -Encoding ASCII -NoNewline
 foreach ($lang in $langs) {
-    # Start from a clean slate so a partial cache dir from an interrupted prior build
-    # can't interfere; topiary re-fetches and recompiles.
+    # Clean slate: a partial cache dir from an interrupted prior build could
+    # interfere; topiary re-fetches and recompiles.
     Remove-Item -Recurse -Force "$tcache\$lang" -EA SilentlyContinue
-    $savedPath = $env:PATH
-    $env:PATH = "$cygBin;$env:PATH"
-    $env:CC   = "$cygBin\x86_64-w64-mingw32-gcc.exe"
-    $env:CXX  = "$cygBin\x86_64-w64-mingw32-g++.exe"
-    # Any input triggers the fetch+compile (it happens before parsing); a parse error
-    # on a trivial snippet is harmless -- we only need the compiled grammar .dll.
-    # On a cold cache topiary clones; git's "Cloning into..." (a child-process write
-    # that *>$null can't swallow) is a terminating error under Stop that kills topiary
-    # mid-compile. Run under Continue so it finishes; the .dll check below is the gate.
-    $savedEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    "`n" | & $stagedTopiary format -C $gitNcl -l $lang -q $scm *> $null
-    $ErrorActionPreference = $savedEAP
-    $env:PATH = $savedPath
-    Remove-Item Env:CC, Env:CXX -EA SilentlyContinue
+    & cmd /c $grammarBat $lang
     $src = "$tcache\$lang\$rev.dll"
     if (-not (Test-Path $src)) { die "grammar prebuild failed for $lang (no $rev.dll in $tcache\$lang)" }
     Copy-Item $src "$grammarsDir\$lang.dll" -Force
     ok "prebuilt grammar: $lang.dll ($([math]::Round((Get-Item $src).Length/1KB)) KB)"
 }
+Remove-Item $grammarBat -EA SilentlyContinue
 
 ###############################################################################
 # MinGW runtime DLLs
@@ -582,16 +564,7 @@ ok "Extracted $n files (gcc/ld/as + x86_64-w64-mingw32/lib)"
 # cygpath.bat shim: flexlink calls cygpath for path normalisation; this stub
 # strips option flags and echoes the path argument unchanged (native Windows
 # paths work as-is with the bundled flexlink).
-@"
-@echo off
-:parse
-if "%~1"=="-w" ( shift & goto parse )
-if "%~1"=="-m" ( shift & goto parse )
-if "%~1"=="-u" ( shift & goto parse )
-if "%~1"=="-a" ( shift & goto parse )
-if "%~1"=="-p" ( shift & goto parse )
-if not "%~1"=="" echo %~1
-"@ | Set-Content "$staging\toolchain\bin\cygpath.bat" -Encoding ASCII
+Copy-Item "$PSScriptRoot\helpers\cygpath.bat" "$staging\toolchain\bin\cygpath.bat"
 ok "cygpath.bat"
 
 ###############################################################################
@@ -643,31 +616,18 @@ ok "plugins: $pluginNames"
 
 info "Generating wrapper scripts"
 
+# Shipped-script sources live in helpers\: static ones are copied verbatim; the
+# per-tool .cmd is instantiated from the @NAME@ template.
+$helpersDir = Join-Path $PSScriptRoot "helpers"
+foreach ($w in @("tool-wrapper.cmd.in", "catala-format.cmd", "cygpath.bat",
+                 "install-vscode-extension.cmd", "install-vscode-ext.ps1")) {
+    if (-not (Test-Path (Join-Path $helpersDir $w))) { die "shipped-script source missing: helpers\$w" }
+}
+$toolWrapperTpl = Get-Content -Raw (Join-Path $helpersDir "tool-wrapper.cmd.in")
+
 function Write-OcamlWrapper([string]$name) {
-    $script = @"
-@echo off
-:: catala bundle wrapper for $name
-setlocal
-for %%I in ("%~dp0..") do set "BASE=%%~fI"
-set "TC=%BASE%\toolchain"
-set "OCAMLLIB=%TC%\lib\ocaml"
-set "NINJA_BIN=%TC%\bin\ninja.exe"
-if not defined CATALA_PLUGINS set "CATALA_PLUGINS=%TC%\lib\catala\plugins"
-:: Under a spaced install dir (e.g. C:\Program Files\Catala) gcc hands ld its
-:: startfile paths (default-manifest.o, crt2.o) UNQUOTED, so ld splits on the
-:: space ("ld: cannot find C:/Program"). Feed the gcc-facing vars the space-free
-:: 8.3 short path instead. No-op when the install dir has no space (the shipped
-:: ProgramData install stays byte-identical). Needs 8.3 names (on by default on C:).
-set "TCS=%TC%"
-echo "%TC%"|find " ">nul && for %%I in ("%TC%") do set "TCS=%%~sI"
-set "LIBRARY_PATH=%TCS%\x86_64-w64-mingw32\lib"
-:: FLEXLINKFLAGS is re-tokenized on spaces by flexlink; keep it quoted regardless.
-set "FLEXLINKFLAGS=-L"%TCS%\lib\ocaml\flexdll""
-set "PATH=%TCS%\bin;%TC%\bin;%PATH%"
-"%TC%\bin\$name.exe" %*
-exit /b %ERRORLEVEL%
-"@
-    $script | Set-Content "$staging\bin\$name.cmd" -Encoding ASCII
+    ($toolWrapperTpl -replace '@NAME@', $name) |
+        Set-Content "$staging\bin\$name.cmd" -Encoding ASCII -NoNewline
     ok "$name.cmd"
 }
 
@@ -675,17 +635,7 @@ Write-OcamlWrapper "catala"
 Write-OcamlWrapper "clerk"
 Write-OcamlWrapper "catala-lsp"
 Write-OcamlWrapper "catala-dap"
-@"
-@echo off
-:: catala bundle wrapper for catala-format
-setlocal
-for %%I in ("%~dp0..") do set "BASE=%%~fI"
-set "TC=%BASE%\toolchain"
-set "XDG_CACHE_HOME=%TC%\share"
-set "PATH=%TC%\bin\.topiary-wrapped;%TC%\bin;%PATH%"
-"%TC%\bin\catala-format.exe" %*
-exit /b %ERRORLEVEL%
-"@ | Set-Content "$staging\bin\catala-format.cmd" -Encoding ASCII
+Copy-Item (Join-Path $helpersDir "catala-format.cmd") "$staging\bin\catala-format.cmd"
 ok "catala-format.cmd"
 
 ###############################################################################
@@ -695,7 +645,7 @@ ok "catala-format.cmd"
 # defender.ps1: drives the opt-in Windows Defender-exclusion custom action of
 # the MSI, and can also be run standalone later to (re)apply or remove the
 # exclusions. Copied verbatim into libexec.
-$defenderSrc = Join-Path $PSScriptRoot "defender.ps1"
+$defenderSrc = Join-Path $PSScriptRoot "helpers\defender.ps1"
 if (-not (Test-Path $defenderSrc)) { die "defender.ps1 not found at $defenderSrc" }
 New-Item -ItemType Directory -Force "$staging\toolchain\libexec" | Out-Null
 Copy-Item $defenderSrc "$staging\toolchain\libexec\defender.ps1"
@@ -704,7 +654,7 @@ ok "defender.ps1"
 # grammar-config.ps1: writes catala.ncl with the real install path at install time
 # (the prebuilt grammars are shipped, but their absolute path is only known then --
 # it differs per scope). Driven by a WiX deferred custom action; harmless to re-run.
-$grammarCfgSrc = Join-Path $PSScriptRoot "grammar-config.ps1"
+$grammarCfgSrc = Join-Path $PSScriptRoot "helpers\grammar-config.ps1"
 if (-not (Test-Path $grammarCfgSrc)) { die "grammar-config.ps1 not found at $grammarCfgSrc" }
 Copy-Item $grammarCfgSrc "$staging\toolchain\libexec\grammar-config.ps1"
 ok "grammar-config.ps1"
@@ -713,23 +663,7 @@ ok "grammar-config.ps1"
 # the bundle root next to the .vsix; the MSI wires a Start Menu shortcut to it.
 # (The MSI can't do this itself: a per-machine install runs as SYSTEM, but
 # extensions install per-user, so the user runs this from the Start Menu.)
-@'
-@echo off
-setlocal
-set "VSIX="
-for %%F in ("%~dp0catala-*.vsix") do set "VSIX=%%~fF"
-if not defined VSIX (
-  echo No Catala .vsix found next to this script.
-  pause & exit /b 1
-)
-where code >nul 2>nul || (echo VS Code 'code' command not found on PATH -- install VS Code first. & pause & exit /b 1)
-echo Installing the Catala VS Code extension from:
-echo   %VSIX%
-call code --install-extension "%VSIX%"
-echo.
-echo Done. Restart VS Code to activate the extension.
-pause
-'@ | Set-Content "$staging\install-vscode-extension.cmd" -Encoding ASCII
+Copy-Item (Join-Path $helpersDir "install-vscode-extension.cmd") "$staging\install-vscode-extension.cmd"
 ok "install-vscode-extension.cmd"
 
 # install-vscode-ext.ps1: NON-interactive extension installer, driven by the
@@ -738,38 +672,7 @@ ok "install-vscode-extension.cmd"
 # PATH or in the standard user/system install locations and runs
 # --install-extension. Always exits 0: a missing VS Code is a skip, never a
 # failure, so it can never block the install (graceful degradation).
-@'
-param([string]$InstallDir)
-$ErrorActionPreference = "SilentlyContinue"
-# Derive from the script location: the MSI CA passes no -InstallDir, because
-# "[INSTALLFOLDER]" ends in a backslash and "\"" escapes the closing quote.
-if (-not $InstallDir) { $InstallDir = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
-$vsix = Get-ChildItem (Join-Path $InstallDir "catala-*.vsix") | Select-Object -First 1
-if (-not $vsix) { Write-Output "No Catala .vsix found; skipping."; exit 0 }
-function Install-Into($codeExe, $extDir) {
-  if ($extDir) { & $codeExe --install-extension "$($vsix.FullName)" --extensions-dir "$extDir" --force 2>&1 | Write-Output }
-  else         { & $codeExe --install-extension "$($vsix.FullName)" --force 2>&1 | Write-Output }
-}
-# When the CA runs with the user environment (interactive install), code is on
-# PATH or in the current user LOCALAPPDATA; a plain install lands in the right
-# profile.
-$g = (Get-Command code -ErrorAction SilentlyContinue).Source
-if ($g) { Install-Into $g $null; exit 0 }
-foreach ($p in @("$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd",
-                 "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd",
-                 "${env:ProgramFiles(x86)}\Microsoft VS Code\bin\code.cmd")) {
-  if (Test-Path $p) { Install-Into $p $null; exit 0 }
-}
-# Fallback: a SYSTEM-ish CA environment. Search real user profiles and install
-# explicitly into that user's extensions dir.
-$any = $false
-Get-ChildItem C:\Users -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-  $c = Join-Path $_.FullName "AppData\Local\Programs\Microsoft VS Code\bin\code.cmd"
-  if (Test-Path $c) { $any = $true; Install-Into $c (Join-Path $_.FullName ".vscode\extensions") }
-}
-if (-not $any) { Write-Output "VS Code not found; skipping extension install." }
-exit 0
-'@ | Set-Content "$staging\toolchain\libexec\install-vscode-ext.ps1" -Encoding ASCII
+Copy-Item (Join-Path $helpersDir "install-vscode-ext.ps1") "$staging\toolchain\libexec\install-vscode-ext.ps1"
 ok "install-vscode-ext.ps1"
 
 ###############################################################################

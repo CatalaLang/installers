@@ -4,45 +4,26 @@
   Add or remove Windows Defender exclusions for the Catala toolchain.
 
 .DESCRIPTION
-  Catala's build/test loop spawns a storm of short-lived native compilers
-  (ocamlopt -> flexlink -> gcc -> ld -> as) plus catala/clerk themselves, with
-  heavy temp/.o/.cmx/.cmxs I/O. Defender real-time scanning of all that pegs
-  MsMpEng.exe and roughly doubles `clerk test` wall time on a 2-core machine.
-
-  This script adds *scoped* exclusions (NOT a global disable -- Tamper
-  Protection blocks that and it is worse posture):
-    - a path exclusion for the install directory (covers the toolchain tree
-      and any temp files written under it), and
-    - full-path process exclusions for the bundled compilers (full path, not
-      bare name, so the exclusion is not trivially spoofable and also covers
-      the temp I/O those processes do regardless of the working directory).
-
-  Defender exclusions are machine-wide (HKLM) and always require an elevated
-  token. This script:
-    - if already elevated, applies the exclusions directly;
-    - if not elevated and -SelfElevate is given, relaunches itself once via
-      UAC (Start-Process -Verb RunAs);
-    - if not elevated and cannot/should not elevate, prints the exact
-      exclusion list so it can be pushed via GPO/Intune, and exits 0.
-
-  It is intentionally non-fatal: on a managed machine where exclusions are
-  policy-locked, the toolchain still works (just slower), so a failure here
-  must never fail the install.
+  Defender real-time scanning of the compiler storm (ocamlopt/flexlink/gcc/ld/as
+  + heavy .o/.cmx I/O) roughly doubles `clerk test` wall time. Adds scoped
+  exclusions (path + full-path process; NOT a global disable, which Tamper
+  Protection blocks anyway). Non-fatal by design: a policy-locked machine still
+  works (just slower), so failure here must never fail the install.
 
 .PARAMETER InstallDir
-  The Catala install directory (the folder containing bin\ and toolchain\).
+  Catala install directory (contains bin\ and toolchain\).
 
 .PARAMETER Add
   Add the exclusions.
 
 .PARAMETER Remove
-  Remove the exclusions (used on uninstall and by `--remove`).
+  Remove the exclusions (uninstall / --remove).
 
 .PARAMETER SelfElevate
-  If not running elevated, relaunch once through UAC. Used by the installer.
+  Relaunch once through UAC if not elevated. Used by the installer.
 
 .PARAMETER Quiet
-  Suppress the informational banner (used for silent installs).
+  Suppress the banner (silent installs).
 #>
 param(
     [Parameter(Mandatory = $true)][string]$InstallDir,
@@ -61,12 +42,11 @@ function warn([string]$m) { Write-Host $m -ForegroundColor Yellow }
 
 if (-not ($Add -or $Remove)) { $Add = $true }   # default action is -Add
 
-# Normalise: strip a trailing slash so paths compare/print cleanly.
+# Strip trailing slash so paths compare/print cleanly.
 $InstallDir = $InstallDir.TrimEnd('\', '/')
 $tcBin = Join-Path $InstallDir 'toolchain\bin'
 
-# The processes whose scanning dominates the build/test loop. Full paths only.
-# collect2.exe / cc1.exe live under the gcc libexec tree; include them when present.
+# Full paths only. collect2/cc1 live under the gcc libexec tree; added below when present.
 $procNames = @(
     'ocamlopt.exe', 'ocamlc.exe', 'flexlink.exe', 'ninja.exe',
     'gcc.exe', 'x86_64-w64-mingw32-gcc.exe', 'ld.exe', 'as.exe',
@@ -77,7 +57,6 @@ foreach ($p in $procNames) {
     $full = Join-Path $tcBin $p
     if (Test-Path $full) { $procPaths += $full }
 }
-# gcc's internal helpers (collect2, cc1) under libexec\gcc\<triple>\<ver>\
 $libexecGcc = Join-Path $InstallDir 'toolchain\libexec\gcc'
 if (Test-Path $libexecGcc) {
     Get-ChildItem -Path $libexecGcc -Recurse -Include 'collect2.exe', 'cc1.exe', 'cc1plus.exe' `
@@ -101,8 +80,7 @@ function Print-GpoList {
     Write-Host ""
 }
 
-# Defender may be absent (Server Core), replaced by a third-party AV, or the
-# cmdlets may be unavailable. Treat all of that as "nothing to do", non-fatal.
+# Defender cmdlets may be absent (Server Core, third-party AV): non-fatal, nothing to do.
 if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
     info "Windows Defender cmdlets not available; skipping exclusions."
     exit 0
@@ -110,7 +88,7 @@ if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
 
 if (-not (Test-Admin)) {
     if ($SelfElevate) {
-        # Relaunch once, elevated, WITHOUT -SelfElevate to avoid a loop.
+        # WITHOUT -SelfElevate to avoid an elevation loop.
         $action = if ($Remove) { '-Remove' } else { '-Add' }
         $argList = @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass',
@@ -123,7 +101,7 @@ if (-not (Test-Admin)) {
                     -Verb RunAs -PassThru -Wait -ErrorAction Stop
             exit $p.ExitCode
         } catch {
-            # User declined UAC, or no interactive desktop (silent install).
+            # UAC declined, or no interactive desktop (silent install).
             warn "Could not elevate to set Defender exclusions ($($_.Exception.Message))."
             Print-GpoList
             exit 0
