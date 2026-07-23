@@ -561,6 +561,17 @@ foreach ($key in $exact.Keys) {
 }
 ok "Extracted $n files (gcc/ld/as + x86_64-w64-mingw32/lib)"
 
+# winlibs gcc ships a UTF-8 activeCodePage manifest; ld/as don't -> they read
+# UTF-8 paths in the ANSI codepage, breaking accented install dirs. Stamp to match.
+$mt = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\mt.exe" -ErrorAction SilentlyContinue |
+    Sort-Object FullName | Select-Object -Last 1
+if (-not $mt) { die "mt.exe not found (Windows SDK is required to stamp binutils manifests)" }
+foreach ($exe in @("$tc\bin\ld.exe", "$tc\bin\as.exe")) {
+    & $mt.FullName -nologo "-inputresource:$exe;#1" -manifest "$PSScriptRoot\helpers\utf8-codepage.manifest" "-outputresource:$exe;#1"
+    if ($LASTEXITCODE -ne 0) { die "mt.exe failed on $exe (exit $LASTEXITCODE)" }
+}
+ok "UTF-8 activeCodePage manifest stamped: ld.exe, as.exe"
+
 # cygpath.bat shim: flexlink calls cygpath for path normalisation; this stub
 # strips option flags and echoes the path argument unchanged (native Windows
 # paths work as-is with the bundled flexlink).
