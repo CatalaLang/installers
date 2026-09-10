@@ -8,7 +8,7 @@ on:
     inputs:
       catala_rev:
         description: catala git ref to build (branch, tag, or SHA)
-        default: clerk-windows-fixes
+        default: master
         required: false
       catala_format_rev:
         description: catala-format git ref (branch, tag, or SHA)
@@ -36,8 +36,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: CatalaLang/catala
-          # pinned to fix branch until Windows fixes land in master
-          ref: ${{ inputs.catala_rev || 'clerk-windows-fixes' }}
+          ref: ${{ inputs.catala_rev || 'master' }}
           path: catala-src
 
       - name: Exclude build tree from Windows Defender
