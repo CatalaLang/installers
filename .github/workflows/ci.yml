@@ -263,7 +263,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "clerk test exited $LASTEXITCODE" }
           # count assertion guards the Windows CRLF regression where clerk test
           # exits 0 while counting 0/0/0.
-          $m = [regex]::Match($out, 'tests\s+(\d+)\s+(\d+)\s+(\d+)')
+          $m = [regex]::Match($out, '(?i)tests\s+(\d+)\s+(\d+)\s+(\d+)')
           if (-not $m.Success) { throw "no test-count summary in clerk test output" }
           $failed = [int]$m.Groups[1].Value; $passed = [int]$m.Groups[2].Value
           if ($failed -ne 0 -or $passed -lt 2) {
