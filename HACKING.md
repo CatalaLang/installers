@@ -6,13 +6,14 @@ This repo packages the Catala toolchain as a Windows MSI (Windows-only).
 
 ```
 build-bundle.ps1        stage the toolchain + build the MSI (run on Windows)
-defender.ps1            opt-in Defender-exclusion script (shipped + driven by the MSI)
 test-clean-install.ps1  manual clean-machine MSI validation (hides opam, asserts no leakage)
 wix/Catala.wxs          WiX v5 MSI authoring
 wix/license.rtf         license shown by the installer UI
-DESIGN.md               architecture
-.github/workflows/ci.yml   build + clean-install test on windows-latest
-tests/                  fixtures for the clean-install test
+helpers/                scripts shipped inside the bundle
+.github/workflows/ci.yml             build + install/test matrix on windows-latest
+.github/workflows/publish.yml        promote a vetted CI artifact to a draft release
+.github/workflows/verify-publish.yml verify the signed MSI, un-draft
+tests/                  fixtures for the CI tests
 ```
 
 ## Building the MSI
@@ -64,44 +65,66 @@ any Defender exclusions the installer added).
 
 `.github/workflows/ci.yml` (windows-latest): **build** (set up opam, build catala
 + catala-format + catala-lsp, install WiX, run `build-bundle.ps1`, upload the MSI),
-then **test** (silent install, smoke checks + catala-format unicode roundtrip,
-`clerk test` against catala-examples, uninstall + assert clean). `workflow_dispatch`
-inputs pin `catala_rev` / `catala_format_rev` / `catala_lsp_rev`. The `bundle-windows`
-artifact (MSI + `.sha256`) is kept 30 days.
+then **test** the same bytes on two installs, default (`C:\ProgramData\Catala`) and
+spaced+accented (`C:\Program Files\Catala accentué`): smoke checks, catala-format
+unicode roundtrip, `clerk test` on catala-examples (interpreter; ocaml, java, python
+backends; an accented project dir), an external OCaml module with a test-count
+assertion, uninstall + assert clean. The C backend step is **expected to fail** (no C
+toolchain in the bundle yet) and turns red the day it passes. `workflow_dispatch`
+inputs pin `catala_rev` / `catala_format_rev` / `catala_lsp_rev` (full SHAs, tags or
+branches). The `bundle-windows` artifact (MSI + `.sha256`) is kept 30 days.
 
-## Making an alpha release
+## Releasing
 
-Releases are **promoted from a vetted CI build**, not rebuilt — so the published
-`.msi` is byte-for-byte what you tested.
+Releases are **promoted from a vetted CI build**, never rebuilt (no opam lockfile:
+a rebuild may resolve different dependencies). The published `.msi` is byte-for-byte
+what was tested, plus the signature.
 
-1. **Build.** Push to `main` (or `workflow_dispatch` on `ci.yml`). The build job
-   uploads a `bundle-windows` artifact (MSI + `.sha256`).
-2. **Vet.** Open the run → Artifacts → download `bundle-windows` → install and test.
-   The run's id is the number in its URL (`…/actions/runs/<run_id>`) — that's what
-   you promote.
-3. **Promote.** Actions → **Publish installer release** (`.github/workflows/publish.yml`)
-   → *Run workflow*, with:
-   - `run_id` = the vetted run,
-   - `tag` = e.g. `catala-1.2.0-alpha1` (the `-alphaN` lives in the tag, **not** the
-     MSI ProductVersion),
-   - `prerelease` = true (soft release: shown on Releases, not flagged "Latest"),
-   - `draft` = true to keep it maintainer-only until you publish.
+Two kinds, one pipeline:
 
-   It downloads that run's exact MSI and attaches it to a GitHub release. Release
-   assets never expire (unlike the 30-day artifact).
+| | Pre-release (testing) | Release |
+|---|---|---|
+| Bundles | catala `master` (or any SHA) | a catala opam release, by its tag |
+| Tag | blank ⇒ `windows-testing-YYYY.MM.DD-<catala-sha>` | `v<version>`, checked against the MSI |
+| GitHub | pre-release flag | latest |
+| Manual pass | short (~30 min) | full (~2 h, metal box) |
 
-**Versioning:** the MSI ProductVersion is the **catala compiler
-version** (users think "catala toolchain 1.x"); the filename carries the installer
-short-sha so two builds of one catala version are distinguishable; `manifest.json`
-inside the install is the source of truth for every component SHA. Installer-only
-fixes ship as new artifacts of the same catala version — no opam release needed.
+Steps:
+
+1. **Build.** Push to `main`, or `workflow_dispatch` on `ci.yml` with the refs to bundle.
+   Wait for green. Note the run id (`…/actions/runs/<run_id>`).
+2. **Vet.** Download `bundle-windows` from the run and do the manual pass (VS Code
+   extension, LSP, test explorer, upgrade over an install, offline formatting — what CI
+   can't do). Copy the MSI locally first; `msiexec` off a share fails with error 110.
+3. **Stage.** Actions → *Publish installer release* → run with `run_id`, the tag (or blank),
+   `prerelease`, and `draft` left on. This creates a **draft** carrying
+   `catala-<ver>-windows-x86_64-<sha>-unsigned.msi` + `.sha256`. Drafts are invisible to
+   the public; an unsigned MSI must never be.
+4. **Sign.** On the internal GitLab project `catala-signature`, *Run pipeline* and start
+   the manual `sign` job. It finds the pending draft (or the one named in its `TAG`
+   variable), signs the MSI (INRIA certificate, timestamped), uploads the signed MSI and a
+   fresh `.sha256`, appends both digests to the release notes, deletes the unsigned MSI,
+   and dispatches *Verify and publish* here.
+5. **Verify and publish** runs on its own (windows-latest): checksum, Authenticode chain
+   (Valid, signer INRIA, timestamp present), silent install + `catala --version`,
+   uninstall, then un-drafts. Red means nothing went public: read the log, fix, re-run
+   the sign job after deleting the signed asset from the draft.
+6. **Confirm** from the public URL on a clean box: `Get-FileHash` against the published
+   `.sha256`, install once.
+
+One pending draft at a time: the sign job discovers work by the `-unsigned` suffix.
+
+**If something is wrong after publishing:** `gh release edit <tag> --draft=true` hides it
+immediately (reversible); `gh release delete <tag> --yes --cleanup-tag` withdraws it. Then
+re-cut from step 1. Never patch a published release in place.
+
+**Versioning:** the MSI ProductVersion is the **catala compiler version** as read from
+`catala.opam` at the bundled commit (users think "catala toolchain 1.x"); the filename
+carries the catala short-sha so two builds of one version are distinguishable;
+`manifest.json` inside the install is the source of truth for every component SHA.
+Installer-only fixes ship as new pre-releases of the same catala version.
 
 ## Relation to the catala repo
 
-Depends on the catala branch `clerk-windows-fixes` — Windows fixes for clerk being
-upstreamed: case-insensitive drive-letter handling in path relativization, valid
-`file://` URLs for clickable links, and quoting of exe paths in the generated ninja
-(so an install dir with spaces works), plus earlier CRLF test-output fixes. The
-bundled libs are found via an empty `findlib.conf` marker (not `CATALA_OCAML_LIBDIR`).
-CI also pins `catala-language-server` to `fix/windows-vscode-spawn`. Once these merge,
-this repo builds against catala `master`.
+Builds against catala `master` (the Windows clerk fixes landed in 1.2.1+). The bundled
+libs are found via an empty `findlib.conf` marker (not `CATALA_OCAML_LIBDIR`).

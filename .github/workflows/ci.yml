@@ -236,9 +236,12 @@ jobs:
         # bundle has no C toolchain yet (linker gcc only); turns red when it does
         working-directory: catala-examples
         run: |
+          # GitHub's pwsh wrapper stops on a native non-zero exit before we can read it
+          $ErrorActionPreference = 'Continue'
           $out = clerk test allocations_familiales --backend=c 2>&1 | Out-String
           Write-Host $out
           if ($LASTEXITCODE -eq 0) { throw "C backend now works: make this step gating" }
+          Write-Host "C backend failed as expected (exit $LASTEXITCODE)"
 
       - name: clerk test (Java backend, allocations_familiales)
         working-directory: catala-examples
