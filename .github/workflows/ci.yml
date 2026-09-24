@@ -232,12 +232,13 @@ jobs:
         working-directory: catala-examples
         run: clerk test allocations_familiales --backend=ocaml
 
-      - name: clerk test (C backend, allocations_familiales)
-        # Non-gating: bundle ships only the linker gcc, no libc/GMP headers, so
-        # --backend=c can't build its runtime yet. Full C toolchain is future work.
-        continue-on-error: true
+      - name: clerk test (C backend, allocations_familiales) — expected to fail
+        # bundle has no C toolchain yet (linker gcc only); turns red when it does
         working-directory: catala-examples
-        run: clerk test allocations_familiales --backend=c
+        run: |
+          $out = clerk test allocations_familiales --backend=c 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -eq 0) { throw "C backend now works: make this step gating" }
 
       - name: clerk test (Java backend, allocations_familiales)
         working-directory: catala-examples
