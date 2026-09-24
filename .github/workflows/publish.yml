@@ -1,9 +1,5 @@
 name: Publish installer release
 
-# Manual-only. Promotes the *exact* MSI bytes from a vetted CI run to a GitHub
-# release (assets never expire), rather than rebuilding. Run it from the Actions
-# tab once a build's artifact has been tested good.
-
 on:
   workflow_dispatch:
     inputs:
@@ -18,9 +14,9 @@ on:
         type: boolean
         default: true
       draft:
-        description: Create as a draft (maintainer-only until published)
+        description: Create as a draft (private until the signed MSI is verified and published)
         type: boolean
-        default: false
+        default: true
 
 jobs:
   publish:
