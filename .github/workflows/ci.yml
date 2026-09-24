@@ -273,7 +273,8 @@ jobs:
 
       - name: Uninstall MSI
         run: |
-          $base = if ('${{ matrix.install }}' -eq 'spaced') { "C:\Program Files\Catala" } else { "C:\ProgramData\Catala" }
+          # must match the install step
+          $base = if ('${{ matrix.install }}' -eq 'spaced') { "C:\Program Files\Catala accentu$([char]0x00E9)" } else { "C:\ProgramData\Catala" }
           $msi = (Get-ChildItem bundle -Filter "catala-*.msi")[0]
           $p = Start-Process msiexec.exe -Wait -PassThru `
                  -ArgumentList "/x `"$($msi.FullName)`" /qn /norestart"
