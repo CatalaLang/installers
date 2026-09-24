@@ -1,0 +1,66 @@
+name: Verify and publish
+
+# Dispatched by the GitLab sign job; the gate before a draft goes public.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Draft release tag carrying the signed MSI
+        required: true
+
+jobs:
+  verify-publish:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Download assets
+        run: |
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir assets
+          Get-ChildItem assets
+          if (Get-ChildItem assets -Filter "*-unsigned.msi") { throw "unsigned MSI still on $env:TAG: sign job did not finish" }
+          $msis = @(Get-ChildItem assets -Filter "catala-*.msi")
+          if ($msis.Count -ne 1) { throw "expected exactly one signed MSI on $env:TAG, found $($msis.Count)" }
+          Add-Content $env:GITHUB_ENV "MSI=$($msis[0].FullName)"
+
+      - name: Verify checksum
+        run: |
+          $expected = (Get-Content "$env:MSI.sha256" -Raw).Split(' ')[0].Trim().ToLower()
+          $actual = (Get-FileHash $env:MSI -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $expected) { throw "sha256 mismatch: got $actual expected $expected" }
+          Write-Host "sha256 OK: $actual"
+
+      - name: Verify Authenticode signature
+        run: |
+          $sig = Get-AuthenticodeSignature $env:MSI
+          Write-Host "Status:     $($sig.Status) ($($sig.StatusMessage))"
+          Write-Host "Signer:     $($sig.SignerCertificate.Subject)"
+          Write-Host "Timestamp:  $($sig.TimeStamperCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "signature not valid: $($sig.Status)" }
+          if ($sig.SignerCertificate.Subject -notmatch 'O=INRIA') { throw "unexpected signer: $($sig.SignerCertificate.Subject)" }
+          if (-not $sig.TimeStamperCertificate) { throw "signature is not timestamped" }
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
+          if ($signtool) { & $signtool.FullName verify /pa /v $env:MSI; if ($LASTEXITCODE -ne 0) { throw "signtool verify failed" } }
+
+      - name: Smoke-install the signed MSI
+        run: |
+          $ver = ([regex]::Match((Split-Path $env:MSI -Leaf), '^catala-(.+?)-windows-')).Groups[1].Value
+          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/i `"$env:MSI`" /qn /norestart /l*v msi.log"
+          if ($p.ExitCode -ne 0) { Get-Content msi.log -Tail 40; throw "msiexec exited $($p.ExitCode)" }
+          $out = & "C:\ProgramData\Catala\bin\catala.cmd" --version 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch [regex]::Escape($ver)) { throw "catala --version does not report $ver" }
+          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/x `"$env:MSI`" /qn /norestart"
+          if ($p.ExitCode -ne 0) { throw "uninstall exited $($p.ExitCode)" }
+
+      - name: Publish (un-draft)
+        run: |
+          $draft = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft
+          if ($draft -eq 'true') {
+            gh release edit $env:TAG --repo $env:GITHUB_REPOSITORY --draft=false
+            Write-Host "published $env:TAG"
+          } else { Write-Host "$env:TAG already published; nothing to do" }
