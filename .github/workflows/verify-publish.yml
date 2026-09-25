@@ -8,6 +8,9 @@ on:
       tag:
         description: Draft release tag carrying the signed MSI
         required: true
+      pipeline:
+        description: GitLab sign pipeline id (for the release notes)
+        required: false
 
 jobs:
   verify-publish:
@@ -17,6 +20,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAG: ${{ inputs.tag }}
+      PIPELINE: ${{ inputs.pipeline }}
     steps:
       - name: Download assets
         run: |
@@ -26,6 +30,8 @@ jobs:
           $msis = @(Get-ChildItem assets -Filter "catala-*.msi")
           if ($msis.Count -ne 1) { throw "expected exactly one signed MSI on $env:TAG, found $($msis.Count)" }
           Add-Content $env:GITHUB_ENV "MSI=$($msis[0].FullName)"
+          $unsigned = Get-ChildItem assets -Filter "*-unsigned.msi.sha256"
+          if ($unsigned) { Add-Content $env:GITHUB_ENV "UNSIGNED_SHA=$((Get-Content $unsigned.FullName -Raw).Split(' ')[0].Trim().ToLower())" }
 
       - name: Verify checksum
         run: |
@@ -57,10 +63,16 @@ jobs:
           $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/x `"$env:MSI`" /qn /norestart"
           if ($p.ExitCode -ne 0) { throw "uninstall exited $($p.ExitCode)" }
 
-      - name: Publish (un-draft)
+      - name: Publish (un-draft, provenance in the notes)
         run: |
           $draft = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft
-          if ($draft -eq 'true') {
-            gh release edit $env:TAG --repo $env:GITHUB_REPOSITORY --draft=false
-            Write-Host "published $env:TAG"
-          } else { Write-Host "$env:TAG already published; nothing to do" }
+          if ($draft -ne 'true') { Write-Host "$env:TAG already published; nothing to do"; exit 0 }
+          $signed = (Get-FileHash $env:MSI -Algorithm SHA256).Hash.ToLower()
+          $line = "Signed $(Get-Date -Format yyyy-MM-dd -AsUTC)"
+          if ($env:PIPELINE) { $line += " (GitLab pipeline $env:PIPELINE)" }
+          $line += ". sha256 signed $signed"
+          if ($env:UNSIGNED_SHA) { $line += ", unsigned $env:UNSIGNED_SHA" }
+          $notes = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json body --jq .body
+          Set-Content notes.md "$notes`n`n$line."
+          gh release edit $env:TAG --repo $env:GITHUB_REPOSITORY --notes-file notes.md --draft=false
+          Write-Host "published $env:TAG"
