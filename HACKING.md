@@ -10,9 +10,10 @@ test-clean-install.ps1  manual clean-machine MSI validation (hides opam, asserts
 wix/Catala.wxs          WiX v5 MSI authoring
 wix/license.rtf         license shown by the installer UI
 helpers/                scripts shipped inside the bundle
-.github/workflows/ci.yml             build + install/test matrix on windows-latest
-.github/workflows/publish.yml        promote a vetted CI artifact to a draft release
-.github/workflows/verify-publish.yml verify the signed MSI, un-draft
+.github/workflows/ci.yml             resolve the bundle in the opam repo, build, test, stage a draft
+.github/workflows/publish.yml        stage a CI artifact as a private draft (called by ci.yml)
+.github/workflows/verify.yml            verify the signed candidate (still private)
+.github/workflows/promote.yml           draft → public candidate → release
 tests/                  fixtures for the CI tests
 ```
 
@@ -76,54 +77,38 @@ branches). The `bundle-windows` artifact (MSI + `.sha256`) is kept 30 days.
 
 ## Releasing
 
-Releases are **promoted from a vetted CI build**, never rebuilt (no opam lockfile:
-a rebuild may resolve different dependencies). The published `.msi` is byte-for-byte
-what was tested, plus the signature.
+The recipe is the Catala opam repository (https://catala.gitlabpages.inria.fr/opam-repository).
+A release bundles `catala-full.<version>` as resolved there; a testing build bundles the
+`testing` channel (the three components at the commits the team pinned). CI records every
+resolved SHA in `manifest.json` inside the MSI. Nothing is rebuilt after CI, and no unsigned
+MSI is ever public. Flow: `docs/release-flow.dot` (`dot -Tsvg` to view).
 
-Two kinds, one pipeline:
-
-| | Pre-release (testing) | Release |
+| | Testing build | Release |
 |---|---|---|
-| Bundles | catala `master` (or any SHA) | a catala opam release, by its tag |
-| Tag | blank ⇒ `windows-testing-YYYY.MM.DD-<catala-sha>` | `v<version>`, checked against the MSI |
-| GitHub | pre-release flag | latest |
-| Manual pass | short (~30 min) | full (~2 h, metal box) |
+| CI input `catala_full` | blank | `1.2.1` |
+| Name (tag and MSI) | `1.3.0-testing.20260925` (next version + day) | `1.2.1` |
+| Manual pass, on the public candidate | short | full (~2 h, metal box) |
+| Promoted to | candidate | candidate, then release (Latest) |
 
-Steps:
+1. **CI** → *Run workflow* → `catala_full` (or blank). Builds, tests the MSI on a default
+   and a spaced+accented install, stages a **private draft** named as above.
+2. **Sign**: GitLab `catala-signature` → *Run pipeline* on `main`, start the manual `sign`
+   job (`TAG` = the draft; default: the newest pending). Signs, swaps the signed MSI in,
+   dispatches *Verify candidate* here, which checks checksum, signature chain, install +
+   version, uninstall, and records provenance in the notes. Still a draft.
+3. **Promote candidate** → `tag`, `to` = candidate: public pre-release. Test it by hand
+   (the table below), let others test it. Bad: `gh release delete <tag> --yes --cleanup-tag`.
+4. **Release only**: **Promote candidate** → `to` = release. Same bytes, flagged Latest.
 
-1. **Build.** Push to `main`, or `workflow_dispatch` on `ci.yml` with the refs to bundle.
-   Wait for green. Note the run id (`…/actions/runs/<run_id>`).
-2. **Vet.** Download `bundle-windows` from the run and do the manual pass (VS Code
-   extension, LSP, test explorer, upgrade over an install, offline formatting — what CI
-   can't do). Copy the MSI locally first; `msiexec` off a share fails with error 110.
-3. **Stage.** Actions → *Publish installer release* → run with `run_id`, the tag (or blank),
-   `prerelease`, and `draft` left on. This creates a **draft** carrying
-   `catala-<ver>-windows-x86_64-<sha>-unsigned.msi` + `.sha256`. Drafts are invisible to
-   the public; an unsigned MSI must never be.
-4. **Sign.** On the internal GitLab project `catala-signature`, *Run pipeline* and start
-   the manual `sign` job. It finds the pending draft (or the one named in its `TAG`
-   variable), signs the MSI (INRIA certificate, timestamped), uploads the signed MSI and a
-   fresh `.sha256`, deletes the unsigned MSI, and dispatches *Verify and publish* here.
-   It never edits the release itself.
-5. **Verify and publish** runs on its own (windows-latest): checksum, Authenticode chain
-   (Valid, signer INRIA, timestamp present), silent install + `catala --version`,
-   uninstall, then appends the provenance line (date, sign pipeline, both digests) to the
-   notes and un-drafts. Red means nothing went public: read the log, fix, re-run the sign
-   job after deleting the signed asset from the draft.
-6. **Confirm** from the public URL on a clean box: `Get-FileHash` against the published
-   `.sha256`, install once.
+Ad-hoc builds: set any `*_rev` input (master, a branch, a full SHA). Named
+`<ver>-dev.<date>`, kept 30 days as a CI artifact, never staged or signed. To sign one
+anyway, stage it with *Publish installer release* and its run id.
 
-One pending draft at a time: the sign job discovers work by the `-unsigned` suffix.
-
-**If something is wrong after publishing:** `gh release edit <tag> --draft=true` hides it
-immediately (reversible); `gh release delete <tag> --yes --cleanup-tag` withdraws it. Then
-re-cut from step 1. Never patch a published release in place.
-
-**Versioning:** the MSI ProductVersion is the **catala compiler version** as read from
-`catala.opam` at the bundled commit (users think "catala toolchain 1.x"); the filename
-carries the catala short-sha so two builds of one version are distinguishable;
-`manifest.json` inside the install is the source of truth for every component SHA.
-Installer-only fixes ship as new pre-releases of the same catala version.
+Rules of thumb: sign what you intend to put in front of testers, nothing else; one pending
+draft at a time; `catala.opam` on catala master is bumped to the next version right after
+each release (testing builds are named after it); a re-bundle of a released version is
+`1.2.1+2`. Windows compares only the numeric version and accepts any upgrade or downgrade.
+`gh release edit <tag> --draft=true` hides a published release at once.
 
 ## Relation to the catala repo
 

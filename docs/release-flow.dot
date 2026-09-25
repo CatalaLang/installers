@@ -1,0 +1,28 @@
+// Windows installer release flow. Render: dot -Tsvg docs/release-flow.dot -o /tmp/release-flow.svg
+digraph release {
+  rankdir=TB; fontname="Helvetica"; nodesep=0.3; ranksep=0.4;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=10];
+
+  subgraph cluster_legend { label=""; style=invis;
+    lh [label="human", shape=note, fillcolor="#ffe680"];
+    lm [label=<<font point-size="9" color="#555555">GitHub Actions · CatalaLang/installers</font><br/><font face="Courier">job</font>>, fillcolor="#dce8f7"];
+    lg [label=<<font point-size="9" color="#555555">GitLab CI · apollo/catala/catala-signature</font><br/><font face="Courier">job</font>>, fillcolor="#f8dcc8"];
+    lh -> lm -> lg [style=invis];
+  }
+
+  t [label=<<b>choose a catala-full version</b> from the Catala opam repository (e.g. 1.2.1)<br/>— or the <i>testing</i> channel (the team's pinned master snapshots)>, shape=note, fillcolor="#ffe680"];
+  b [label=<<font point-size="9" color="#555555">GitHub Actions · CatalaLang/installers</font><br/><font face="Courier"><b>CI</b></font>  — manual, arg: catala_full (blank = testing)<br/><br/>resolve catala-full.&lt;version&gt; in the opam repo → 3 component refs → build → MSI → install/test matrix<br/>→ PRIVATE DRAFT on installers, named &lt;version&gt; or &lt;next-version&gt;-testing.&lt;date&gt;>, fillcolor="#dce8f7"];
+  s [label=<<font point-size="9" color="#555555">GitLab CI · apollo/catala/catala-signature</font><br/><font face="Courier"><b>sign</b></font>  — manual, arg: TAG (default: newest pending draft)<br/><br/>sign server → signed MSI replaces the unsigned one on the draft>, fillcolor="#f8dcc8"];
+  v [label=<<font point-size="9" color="#555555">GitHub Actions · CatalaLang/installers</font><br/><font face="Courier"><b>Verify candidate</b></font>  — dispatched by sign<br/><br/>checksum, INRIA signature + timestamp, install + version, uninstall<br/>→ provenance in the notes; still a private draft>, fillcolor="#dce8f7"];
+  c [label=<<font point-size="9" color="#555555">GitHub Actions · CatalaLang/installers</font><br/><font face="Courier"><b>Promote candidate</b></font>  — manual, args: tag, to=candidate<br/>→ public pre-release>, fillcolor="#dce8f7"];
+  m [label=<<b>manual pass on the candidate</b>, by you and by testers<br/>testing build: short (~30 min) · release: full (~2 h, metal box)>, shape=note, fillcolor="#ffe680"];
+  r [label=<<font point-size="9" color="#555555">GitHub Actions · CatalaLang/installers</font><br/><font face="Courier"><b>Promote candidate</b></font>  — manual, args: tag=&lt;version&gt;, to=release<br/>→ Latest, same bytes>, fillcolor="#dce8f7"];
+  x [label=<not good → gh release delete; fix, rebuild>, fillcolor="#f0f0f0", style="rounded,filled,dashed"];
+  d [label=<ad-hoc builds: any *_rev input set → named &lt;ver&gt;-dev.&lt;date&gt;,<br/>CI artifact only (30 days), never staged or signed>, fillcolor="#f0f0f0", style="rounded,filled,dashed"];
+
+  t -> b -> s -> v -> c -> m;
+  m -> r [label="release, satisfied"];
+  m -> x [style=dashed];
+  b -> d [style=dashed, label="*_rev set"];
+}

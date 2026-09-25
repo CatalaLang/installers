@@ -17,3 +17,7 @@
 # opam switch cache tarball (setup-ocaml post step)
 /cache.tzst
 /manifest.txt
+
+# rendered from docs/release-flow.dot
+docs/*.svg
+docs/*.png
