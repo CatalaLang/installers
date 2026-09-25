@@ -103,12 +103,13 @@ Steps:
 4. **Sign.** On the internal GitLab project `catala-signature`, *Run pipeline* and start
    the manual `sign` job. It finds the pending draft (or the one named in its `TAG`
    variable), signs the MSI (INRIA certificate, timestamped), uploads the signed MSI and a
-   fresh `.sha256`, appends both digests to the release notes, deletes the unsigned MSI,
-   and dispatches *Verify and publish* here.
+   fresh `.sha256`, deletes the unsigned MSI, and dispatches *Verify and publish* here.
+   It never edits the release itself.
 5. **Verify and publish** runs on its own (windows-latest): checksum, Authenticode chain
    (Valid, signer INRIA, timestamp present), silent install + `catala --version`,
-   uninstall, then un-drafts. Red means nothing went public: read the log, fix, re-run
-   the sign job after deleting the signed asset from the draft.
+   uninstall, then appends the provenance line (date, sign pipeline, both digests) to the
+   notes and un-drafts. Red means nothing went public: read the log, fix, re-run the sign
+   job after deleting the signed asset from the draft.
 6. **Confirm** from the public URL on a clean box: `Get-FileHash` against the published
    `.sha256`, install once.
 
