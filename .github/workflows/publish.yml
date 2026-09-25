@@ -1,13 +1,23 @@
 name: Publish installer release
 
 on:
+  workflow_call:
+    inputs:
+      run_id: { type: string, required: true }
+      tag: { type: string, required: false }
+      notes: { type: string, required: false }
+      prerelease: { type: boolean, default: true }
+      draft: { type: boolean, default: true }
   workflow_dispatch:
     inputs:
       run_id:
-        description: CI run id whose bundle-windows artifact to publish
+        description: CI run id whose bundle-windows artifact to stage (fallback; ci.yml stages by itself)
         required: true
       tag:
-        description: 'Blank = testing pre-release (auto: windows-testing-YYYY.MM.DD-<catala-sha>). Real release: pass v<opam-version>, e.g. v1.2.1 (validated against the bundled version)'
+        description: 'Blank = from the MSI name (<ver> or <ver>-testing.<date>). Given: must equal it'
+        required: false
+      notes:
+        description: Extra line for the release notes (resolved components)
         required: false
       prerelease:
         description: Mark as pre-release (soft release, not flagged "Latest")
@@ -40,25 +50,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # version + catala-sha from the MSI name (catala-<ver>-windows-x86_64-<sha>[-unsigned].msi)
+          # the MSI name carries the identity: catala-<ver>[-testing.<date>]-windows-x86_64[-unsigned].msi
           MSI=$(basename "$(ls out/catala-*.msi | head -1)")
-          VER=${MSI#catala-}; VER=${VER%%-windows-x86_64-*}
-          SHA=${MSI##*-x86_64-}; SHA=${SHA%-unsigned.msi}; SHA=${SHA%.msi}
+          VER=${MSI#catala-}; VER=${VER%%-windows-x86_64*}
           TAG="${{ inputs.tag }}"
-          if [ -z "$TAG" ]; then
-            TAG="windows-testing-$(date -u +%Y.%m.%d)-$SHA"
-          else
-            case "$TAG" in
-              v*)
-                # real release: tag version must match the bundle
-                if [ "${TAG#v}" != "$VER" ]; then
-                  echo "::error::release tag $TAG does not match bundled catala version $VER (from $MSI)"
-                  exit 1
-                fi ;;
-            esac
-          fi
+          [ -z "$TAG" ] || [ "$TAG" = "$VER" ] || { echo "::error::tag $TAG does not match the bundle $VER (from $MSI)"; exit 1; }
+          TAG=$VER
           BUILT=$(gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.run_id }}" --jq .head_sha)
-          echo "Publishing tag: $TAG  (bundled catala $VER, sha $SHA, installer commit $BUILT)"
+          echo "Publishing tag: $TAG  (installer commit $BUILT)"
           flags=""
           [ "${{ inputs.prerelease }}" = "true" ] && flags="$flags --prerelease"
           [ "${{ inputs.draft }}" = "true" ] && flags="$flags --draft"
@@ -66,5 +65,5 @@ jobs:
             --repo "${{ github.repository }}" \
             $flags \
             --title "Catala Windows installer — $TAG" \
-            --notes "Windows alpha installer, promoted from CI run ${{ inputs.run_id }} (installers commit $BUILT). Exact component SHAs are in \`manifest.json\` inside the install." \
+            --notes "Windows installer, promoted from CI run ${{ inputs.run_id }} (installers commit $BUILT). ${{ inputs.notes }} Exact component SHAs are in \`manifest.json\` inside the install." \
             out/catala-*.msi out/catala-*.msi.sha256

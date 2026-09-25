@@ -6,25 +6,70 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      catala_full:
+        description: 'catala-full version to bundle, e.g. 1.2.1 (resolved in the Catala opam repository). Blank = the testing channel'
+        required: false
       catala_rev:
-        description: catala git ref to build (branch, tag, or SHA)
-        default: master
+        description: 'ad-hoc build: catala git ref, e.g. master or a branch. Named -dev.<date>, never staged'
         required: false
       catala_format_rev:
-        description: catala-format git ref (branch, tag, or SHA)
-        default: master
+        description: 'ad-hoc override: catala-format git ref'
         required: false
       catala_lsp_rev:
-        description: catala-language-server git ref (branch, tag, or SHA)
-        default: master
+        description: 'ad-hoc override: catala-language-server git ref'
         required: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  resolve:
+    # The Catala opam repository is the recipe: catala-full.<version> pins the
+    # three components; the testing channel pins their master snapshots.
+    name: Resolve the bundle in the Catala opam repository
+    runs-on: ubuntu-latest
+    outputs:
+      catala: ${{ steps.r.outputs.catala }}
+      catala_format: ${{ steps.r.outputs.catala_format }}
+      catala_lsp: ${{ steps.r.outputs.catala_lsp }}
+      summary: ${{ steps.r.outputs.summary }}
+      label: ${{ steps.r.outputs.label }}
+    steps:
+      - id: r
+        env:
+          BUNDLE: ${{ inputs.catala_full || 'testing' }}
+          OPAMROOT: ${{ runner.temp }}/opam
+        run: |
+          sudo apt-get install -y -qq opam >/dev/null
+          opam init --bare -n --disable-sandboxing --bypass-checks default https://opam.ocaml.org >/dev/null
+          opam repo add catala https://catala.gitlabpages.inria.fr/opam-repository --all --set-default >/dev/null
+          opam list --resolve "catala-full.$BUNDLE" --short --columns name,version | grep -E '^catala' > resolved.txt
+          cat resolved.txt
+          summary=""
+          for p in catala catala-lsp catala-format; do
+            v=$(awk -v p="$p" '$1==p {print $2}' resolved.txt)
+            [ -n "$v" ] || { echo "::error::$p not in the resolution of catala-full.$BUNDLE"; exit 1; }
+            src=$(opam show "$p.$v" --raw | sed -n '/^url {/,/}/p' | grep -o '"[^"]*"' | head -1 | tr -d '"')
+            case "$src" in
+              git+*\#*) ref=${src##*#} ;;
+              */refs/tags/*.tar.gz) ref=${src##*/refs/tags/}; ref=${ref%.tar.gz} ;;
+              *) echo "::error::cannot derive a git ref for $p.$v from $src"; exit 1 ;;
+            esac
+            echo "$p $v -> $ref"
+            echo "$(echo "$p" | tr - _)=$ref" >> "$GITHUB_OUTPUT"
+            summary="$summary$p $v ($ref); "
+          done
+          echo "summary=$summary" >> "$GITHUB_OUTPUT"
+          # release: catala-<ver>; testing: catala-<ver>-testing.<date> (semver pre-release of the next version);
+          # ad-hoc builds (any *_rev override): catala-<ver>-dev.<date>, never staged
+          if [ -n "${{ inputs.catala_rev }}${{ inputs.catala_format_rev }}${{ inputs.catala_lsp_rev }}" ]; then label="-dev.$(date -u +%Y%m%d)"
+          elif [ -n "${{ inputs.catala_full }}" ]; then label=""
+          else label="-testing.$(date -u +%Y%m%d)"; fi
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+
   bundle-windows-build:
     name: Bundle (Windows) — build
+    needs: resolve
     runs-on: windows-latest
     env:
       OPAMCONFIRMLEVEL: unsafe-yes
@@ -36,7 +81,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: CatalaLang/catala
-          ref: ${{ inputs.catala_rev || 'master' }}
+          ref: ${{ inputs.catala_rev || needs.resolve.outputs.catala }}
           path: catala-src
 
       - name: Exclude build tree from Windows Defender
@@ -87,14 +132,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: CatalaLang/catala-format
-          ref: ${{ inputs.catala_format_rev || 'master' }}
+          ref: ${{ inputs.catala_format_rev || needs.resolve.outputs.catala_format }}
           path: catala-format-src
 
       - name: Checkout catala-language-server
         uses: actions/checkout@v4
         with:
           repository: CatalaLang/catala-language-server
-          ref: ${{ inputs.catala_lsp_rev || 'master' }}
+          ref: ${{ inputs.catala_lsp_rev || needs.resolve.outputs.catala_lsp }}
           path: catala-lsp-src
 
       - name: Install catala-format and catala-lsp
@@ -120,7 +165,7 @@ jobs:
           $env:PATH = "$(opam var bin);$env:PATH"
           New-Item -ItemType Directory -Force _bundle | Out-Null
           powershell -ExecutionPolicy Bypass -File ..\build-bundle.ps1 `
-            -LspPath ..\catala-lsp-src
+            -LspPath ..\catala-lsp-src -Label "${{ needs.resolve.outputs.label }}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -288,3 +333,16 @@ jobs:
           if (Test-Path "$base\bin\catala.cmd") {
             throw "Uninstall left files behind"
           }
+
+  stage:
+    name: Stage candidate (private draft)
+    needs: [resolve, bundle-windows-build, bundle-windows-test]
+    if: github.event_name == 'workflow_dispatch' && !inputs.catala_rev && !inputs.catala_format_rev && !inputs.catala_lsp_rev
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/publish.yml
+    with:
+      run_id: ${{ github.run_id }}
+      tag: ${{ inputs.catala_full }}
+      notes: ${{ needs.resolve.outputs.summary }}
