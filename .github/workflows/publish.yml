@@ -57,16 +57,14 @@ jobs:
                 fi ;;
             esac
           fi
-          # tag the commit that built the MSI, not main at un-draft time
-          TARGET=$(gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.run_id }}" --jq .head_sha)
-          echo "Publishing tag: $TAG  (bundled catala $VER, sha $SHA, installer commit $TARGET)"
+          BUILT=$(gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.run_id }}" --jq .head_sha)
+          echo "Publishing tag: $TAG  (bundled catala $VER, sha $SHA, installer commit $BUILT)"
           flags=""
           [ "${{ inputs.prerelease }}" = "true" ] && flags="$flags --prerelease"
           [ "${{ inputs.draft }}" = "true" ] && flags="$flags --draft"
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
-            --target "$TARGET" \
             $flags \
             --title "Catala Windows installer — $TAG" \
-            --notes "Windows alpha installer, promoted from CI run ${{ inputs.run_id }}. Exact component SHAs are in \`manifest.json\` inside the install." \
+            --notes "Windows alpha installer, promoted from CI run ${{ inputs.run_id }} (installers commit $BUILT). Exact component SHAs are in \`manifest.json\` inside the install." \
             out/catala-*.msi out/catala-*.msi.sha256
