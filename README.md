@@ -1,7 +1,5 @@
 # Catala Installers
 
-**Status: work in progress — not ready for general use yet.**
-
 Native installers for the [Catala](https://catala-lang.org) toolchain.
 
 This repository is **Windows-only**. On **Linux, macOS, and WSL, install via
