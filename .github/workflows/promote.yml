@@ -1,0 +1,47 @@
+name: Promote candidate
+
+# Manual. Candidate: the verified draft goes public as a pre-release.
+# Release: the pre-release badge comes off (version tags only). Same bytes throughout.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Candidate tag (1.3.0, or 1.4.0-testing.20260925)
+        required: true
+      to:
+        description: candidate = public pre-release for testers; release = flagged Latest (version tags only)
+        type: choice
+        options: [candidate, release]
+        default: candidate
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ inputs.tag }}
+      TO: ${{ inputs.to }}
+    steps:
+      - name: Check the candidate
+        run: |
+          # drafts are not addressable by tag: go through the list
+          rel=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" \
+                | jq -c --arg t "$TAG" 'map(select(.tag_name == $t)) | first')
+          [ -n "$rel" ] && [ "$rel" != "null" ] || { echo "::error::no release $TAG"; exit 1; }
+          names=$(echo "$rel" | jq -r '.assets[].name')
+          echo "$names" | grep -q -- '-unsigned\.msi$' && { echo "::error::unsigned MSI still on $TAG: not signed"; exit 1; }
+          [ "$(echo "$names" | grep -c -E '^catala-.*\.msi$')" = 1 ] || { echo "::error::expected exactly one signed MSI on $TAG"; exit 1; }
+          echo "$rel" | jq -r .body | grep -q 'Verified by run' || { echo "::error::no verification recorded on $TAG"; exit 1; }
+          if [ "$TO" = release ]; then
+            echo "$TAG" | grep -qE '^[0-9]+(\.[0-9]+)+(\+[0-9]+)?$' || { echo "::error::a release needs a version tag (1.3.0, or 1.3.0+2 for a re-bundle), got $TAG"; exit 1; }
+          fi
+          echo "draft=$(echo "$rel" | jq -r .draft) prerelease=$(echo "$rel" | jq -r .prerelease)"
+
+      - name: Publish
+        run: |
+          if [ "$TO" = release ]; then flags="--draft=false --prerelease=false"; else flags="--draft=false --prerelease"; fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" $flags
+          echo "$TAG is now a public $TO"

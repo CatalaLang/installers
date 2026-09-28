@@ -1,0 +1,25 @@
+name: Dev build
+
+# Any refs → MSI kept 30 days as a CI artifact, named <ver>-dev.<date>. Never staged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      catala_ref:
+        description: catala git ref (branch, tag, full SHA)
+        default: master
+      catala_format_ref:
+        description: catala-format git ref
+        default: master
+      catala_lsp_ref:
+        description: catala-language-server git ref
+        default: master
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      catala_ref: ${{ inputs.catala_ref }}
+      catala_format_ref: ${{ inputs.catala_format_ref }}
+      catala_lsp_ref: ${{ inputs.catala_lsp_ref }}
+      kind: dev

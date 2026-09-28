@@ -1,6 +1,7 @@
-name: Verify and publish
+name: Verify candidate
 
-# Dispatched by the GitLab sign job; the gate before a draft goes public.
+# Dispatched by the GitLab sign job. Checks the signed draft and records the
+# provenance; the draft stays private until promote.yml.
 
 on:
   workflow_dispatch:
@@ -54,7 +55,8 @@ jobs:
 
       - name: Smoke-install the signed MSI
         run: |
-          $ver = ([regex]::Match((Split-Path $env:MSI -Leaf), '^catala-(.+?)-windows-')).Groups[1].Value
+          # numeric part only: a testing build reports the plain version
+          $ver = ([regex]::Match((Split-Path $env:MSI -Leaf), '^catala-(\d+(\.\d+)*)')).Groups[1].Value
           $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/i `"$env:MSI`" /qn /norestart /l*v msi.log"
           if ($p.ExitCode -ne 0) { Get-Content msi.log -Tail 40; throw "msiexec exited $($p.ExitCode)" }
           $out = & "C:\ProgramData\Catala\bin\catala.cmd" --version 2>&1 | Out-String
@@ -63,16 +65,15 @@ jobs:
           $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList "/x `"$env:MSI`" /qn /norestart"
           if ($p.ExitCode -ne 0) { throw "uninstall exited $($p.ExitCode)" }
 
-      - name: Publish (un-draft, provenance in the notes)
+      - name: Record provenance in the notes
         run: |
-          $draft = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft
-          if ($draft -ne 'true') { Write-Host "$env:TAG already published; nothing to do"; exit 0 }
           $signed = (Get-FileHash $env:MSI -Algorithm SHA256).Hash.ToLower()
           $line = "Signed $(Get-Date -Format yyyy-MM-dd -AsUTC)"
           if ($env:PIPELINE) { $line += " (GitLab pipeline $env:PIPELINE)" }
           $line += ". sha256 signed $signed"
           if ($env:UNSIGNED_SHA) { $line += ", unsigned $env:UNSIGNED_SHA" }
+          $line += ". Verified by run $env:GITHUB_RUN_ID."
           $notes = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json body --jq .body
-          Set-Content notes.md "$notes`n`n$line."
-          gh release edit $env:TAG --repo $env:GITHUB_REPOSITORY --notes-file notes.md --draft=false
-          Write-Host "published $env:TAG"
+          Set-Content notes.md "$notes`n`n$line"
+          gh release edit $env:TAG --repo $env:GITHUB_REPOSITORY --notes-file notes.md
+          Write-Host "candidate $env:TAG verified; still a draft"

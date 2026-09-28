@@ -1,0 +1,34 @@
+name: Release build
+
+# catala-full.<version> from the Catala opam repository → private draft <version>.
+
+on:
+  workflow_dispatch:
+    inputs:
+      catala_full:
+        description: catala-full version, e.g. 1.2.1
+        required: true
+
+jobs:
+  resolve:
+    uses: ./.github/workflows/resolve.yml
+    with:
+      catala_full: ${{ inputs.catala_full }}
+  build:
+    needs: resolve
+    uses: ./.github/workflows/build.yml
+    with:
+      catala_ref: ${{ needs.resolve.outputs.catala }}
+      catala_format_ref: ${{ needs.resolve.outputs.catala_format }}
+      catala_lsp_ref: ${{ needs.resolve.outputs.catala_lsp }}
+      kind: release
+  stage:
+    needs: [resolve, build]
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/publish.yml
+    with:
+      run_id: ${{ github.run_id }}
+      tag: ${{ inputs.catala_full }}
+      notes: ${{ needs.resolve.outputs.summary }}

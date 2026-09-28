@@ -1,0 +1,27 @@
+name: Testing build
+
+# The testing channel of the Catala opam repository → private draft <next>-testing.<date>.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  resolve:
+    uses: ./.github/workflows/resolve.yml
+  build:
+    needs: resolve
+    uses: ./.github/workflows/build.yml
+    with:
+      catala_ref: ${{ needs.resolve.outputs.catala }}
+      catala_format_ref: ${{ needs.resolve.outputs.catala_format }}
+      catala_lsp_ref: ${{ needs.resolve.outputs.catala_lsp }}
+      kind: testing
+  stage:
+    needs: [resolve, build]
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/publish.yml
+    with:
+      run_id: ${{ github.run_id }}
+      notes: ${{ needs.resolve.outputs.summary }}
