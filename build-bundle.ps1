@@ -27,6 +27,7 @@ param(
     [string]$MingwZip   = "",   # path to pre-downloaded winlibs zip (skips download)
     [string]$LspPath    = "",   # path to catala-language-server checkout (build VSIX from source)
     [string]$LspRef     = "master",
+    [string]$Label      = "",   # version suffix in the MSI name, e.g. -testing.20260925 (release: none)
     [ValidateSet("perUser","perMachine")]
     [string]$Scope      = "perMachine"  # perMachine -> C:\ProgramData\Catala (shipped: IT-deployable, space-free); perUser -> %LOCALAPPDATA% (no admin)
 )
@@ -238,7 +239,7 @@ if ($lspRepo) {
 # Staging directory
 ###############################################################################
 
-$bundleName = "catala-$version-windows-x86_64"
+$bundleName = "catala-$version$Label-windows-x86_64"
 $staging    = "$OutputDir\stage\$bundleName"
 
 info "Assembling $staging"
@@ -846,10 +847,8 @@ if (-not $msiVersion) { die "Could not derive a numeric MSI version from '$versi
 
 info "Building MSI (WiX) version $msiVersion"
 New-Item -ItemType Directory -Force $OutputDir | Out-Null
-# catala-sha in the name (installer-sha is unchanged by catala-only rebuilds);
 # "-unsigned" = the sign job's input, dropped on its signed output.
-$catalaSha = $manifestComponents["catala"].sha
-$msiName = if ($catalaSha) { "$bundleName-$catalaSha-unsigned" } else { "$bundleName-unsigned" }
+$msiName = "$bundleName-unsigned"
 $msiPath = Join-Path (Resolve-Path $OutputDir) "$msiName.msi"
 Remove-Item $msiPath -ErrorAction SilentlyContinue
 

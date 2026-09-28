@@ -1,0 +1,57 @@
+name: Resolve in the Catala opam repository
+
+# catala-full.<version> pins the three components; the testing channel pins
+# their master snapshots.
+
+on:
+  workflow_call:
+    inputs:
+      catala_full:
+        description: catala-full version; blank = testing
+        type: string
+        required: false
+    outputs:
+      catala:
+        value: ${{ jobs.resolve.outputs.catala }}
+      catala_format:
+        value: ${{ jobs.resolve.outputs.catala_format }}
+      catala_lsp:
+        value: ${{ jobs.resolve.outputs.catala_lsp }}
+      summary:
+        value: ${{ jobs.resolve.outputs.summary }}
+
+jobs:
+  resolve:
+    name: Resolve
+    runs-on: ubuntu-latest
+    outputs:
+      catala: ${{ steps.r.outputs.catala }}
+      catala_format: ${{ steps.r.outputs.catala_format }}
+      catala_lsp: ${{ steps.r.outputs.catala_lsp }}
+      summary: ${{ steps.r.outputs.summary }}
+    steps:
+      - id: r
+        env:
+          BUNDLE: ${{ inputs.catala_full || 'testing' }}
+          OPAMROOT: ${{ runner.temp }}/opam
+        run: |
+          sudo apt-get install -y -qq opam >/dev/null
+          opam init --bare -n --disable-sandboxing --bypass-checks default https://opam.ocaml.org >/dev/null
+          opam repo add catala https://catala.gitlabpages.inria.fr/opam-repository --all --set-default >/dev/null
+          opam list --resolve "catala-full.$BUNDLE" --short --columns name,version | grep -E '^catala' > resolved.txt
+          cat resolved.txt
+          summary=""
+          for p in catala catala-lsp catala-format; do
+            v=$(awk -v p="$p" '$1==p {print $2}' resolved.txt)
+            [ -n "$v" ] || { echo "::error::$p not in the resolution of catala-full.$BUNDLE"; exit 1; }
+            src=$(opam show "$p.$v" --raw | sed -n '/^url {/,/}/p' | grep -o '"[^"]*"' | head -1 | tr -d '"')
+            case "$src" in
+              git+*\#*) ref=${src##*#} ;;
+              */refs/tags/*.tar.gz) ref=${src##*/refs/tags/}; ref=${ref%.tar.gz} ;;
+              *) echo "::error::cannot derive a git ref for $p.$v from $src"; exit 1 ;;
+            esac
+            echo "$p $v -> $ref"
+            echo "$(echo "$p" | tr - _)=$ref" >> "$GITHUB_OUTPUT"
+            summary="$summary$p $v ($ref); "
+          done
+          echo "summary=$summary" >> "$GITHUB_OUTPUT"

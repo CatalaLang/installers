@@ -1,0 +1,284 @@
+name: Build and test the MSI
+
+on:
+  workflow_call:
+    inputs:
+      catala_ref: { type: string, required: true }
+      catala_format_ref: { type: string, required: true }
+      catala_lsp_ref: { type: string, required: true }
+      kind:
+        description: release | testing | dev (names the MSI)
+        type: string
+        required: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  bundle-windows-build:
+    name: Bundle (Windows) — build
+    runs-on: windows-latest
+    env:
+      OPAMCONFIRMLEVEL: unsafe-yes
+    steps:
+      - name: Checkout installers
+        uses: actions/checkout@v4
+
+      - name: Checkout catala
+        uses: actions/checkout@v4
+        with:
+          repository: CatalaLang/catala
+          ref: ${{ inputs.catala_ref }}
+          path: catala-src
+
+      - name: Exclude build tree from Windows Defender
+        # Defender scanning a freshly-written .cmxs.startup.o can briefly lock it,
+        # making concurrent ocamlopt -shared linking intermittently fail with "No
+        # such file". Runner-only, best-effort; never fail CI over it.
+        shell: pwsh
+        run: |
+          foreach ($p in @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)) {
+            try {
+              Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+              Write-Host "Defender exclusion added: $p"
+            } catch {
+              Write-Host "Could not exclude $p (non-fatal): $_"
+            }
+          }
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.3.0"
+          opam-local-packages: catala-src/catala.opam
+          dune-cache: false
+
+      - name: Pre-install conf-pkg-config
+        run: opam install conf-pkg-config
+
+      - name: Build and install catala
+        run: opam install ./catala-src/catala.opam
+
+      - name: Run catala OCaml unit tests (path / file-URL logic)
+        # Guards the Windows drive-case / UNC / quoting logic (tests force ~win32).
+        # tests.exe only, not `dune runtest` (avoids the heavy reftest suite).
+        working-directory: catala-src
+        run: opam exec -- dune exec compiler/tests.exe
+
+      - name: Install topiary 0.6.0 (prebuilt binary, fake opam pin)
+        run: |
+          $url = "https://github.com/tweag/topiary/releases/download/v0.6.0/topiary-cli-x86_64-pc-windows-msvc.zip"
+          Invoke-WebRequest $url -OutFile topiary.zip
+          Expand-Archive topiary.zip -DestinationPath topiary-bin
+          $opamBin = opam var bin
+          New-Item -ItemType Directory -Force "$opamBin\.topiary-wrapped" | Out-Null
+          Copy-Item topiary-bin\topiary.exe "$opamBin\.topiary-wrapped\topiary.exe"
+          opam install topiary --fake
+
+      - name: Checkout catala-format
+        uses: actions/checkout@v4
+        with:
+          repository: CatalaLang/catala-format
+          ref: ${{ inputs.catala_format_ref }}
+          path: catala-format-src
+
+      - name: Checkout catala-language-server
+        uses: actions/checkout@v4
+        with:
+          repository: CatalaLang/catala-language-server
+          ref: ${{ inputs.catala_lsp_ref }}
+          path: catala-lsp-src
+
+      - name: Install catala-format and catala-lsp
+        run: |
+          opam pin catala-format ./catala-format-src --no-action
+          opam pin catala-lsp    ./catala-lsp-src    --no-action
+          opam install catala-format catala-lsp
+
+      - name: Ensure ninja on PATH
+        run: choco install ninja -y --no-progress
+
+      - name: Install WiX toolset
+        # Pin v5: v6+ require accepting the OSMF EULA (WIX7015), blocking unattended builds.
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add -g WixToolset.Util.wixext/5.0.2
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add -g WixToolset.UI.wixext/5.0.2
+
+      - name: Build Windows MSI
+        working-directory: catala-src
+        run: |
+          # release: catala-<ver>; testing / dev: catala-<ver>-<kind>.<date>
+          $label = if ('${{ inputs.kind }}' -eq 'release') { '' } else { "-${{ inputs.kind }}.$(Get-Date -Format yyyyMMdd -AsUTC)" }
+          $env:PATH = "$(opam var bin);$env:PATH"
+          New-Item -ItemType Directory -Force _bundle | Out-Null
+          powershell -ExecutionPolicy Bypass -File ..\build-bundle.ps1 `
+            -LspPath ..\catala-lsp-src -Label $label
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-windows
+          path: |
+            catala-src/_bundle/catala-*.msi
+            catala-src/_bundle/catala-*.msi.sha256
+          # wider window to vet a build before promoting it via publish.yml
+          retention-days: 30
+
+  bundle-windows-test:
+    name: Bundle (Windows) — test (${{ matrix.install }} install)
+    needs: bundle-windows-build
+    if: needs.bundle-windows-build.result == 'success'
+    runs-on: windows-latest
+    strategy:
+      # don't let one install variant cancel the other
+      fail-fast: false
+      matrix:
+        # default: ProgramData (no spaces); spaced: space + accents in path
+        install: [default, spaced]
+    steps:
+      - name: Checkout installers (for test files)
+        uses: actions/checkout@v4
+
+      - name: Set up a JDK (for the Java backend)
+        # pin a JDK so java/javac/jar are deterministically on PATH
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-windows
+          path: bundle
+
+      - name: Install MSI (per-machine, silent)
+        run: |
+          $msi = (Get-ChildItem bundle -Filter "catala-*.msi")[0]
+          $log = "msi-install.log"
+          if ('${{ matrix.install }}' -eq 'spaced') {
+            # "Catala accentué" -- accent via [char] keeps the YAML ASCII-safe
+            $base = "C:\Program Files\Catala accentu$([char]0x00E9)"
+            $args = "/i `"$($msi.FullName)`" INSTALLFOLDER=`"$base`" /qn /norestart /l*v `"$log`""
+          } else {
+            $base = "C:\ProgramData\Catala"
+            $args = "/i `"$($msi.FullName)`" /qn /norestart /l*v `"$log`""
+          }
+          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $args
+          if ($p.ExitCode -ne 0) { Get-Content $log -Tail 60; throw "msiexec exited $($p.ExitCode)" }
+          if (-not (Test-Path "$base\bin\catala.cmd")) { throw "Install incomplete: $base\bin\catala.cmd missing" }
+          Add-Content -Path $env:GITHUB_PATH -Value "$base\bin"
+
+      - name: Smoke test (basic invocations)
+        run: |
+          catala --version
+          $catalaHelp = & catala --help 2>&1 | Out-String
+          if ($catalaHelp -notmatch "testcase") { throw "testcase plugin missing from bundle (not listed in catala --help)" }
+          clerk --help 2>&1 | Out-Null
+          catala-format --help 2>&1 | Out-Null
+
+      - name: catala-format (unicode / diacritics roundtrip)
+        shell: powershell
+        run: |
+          # verify catala-format preserves non-ASCII code points (risk on Windows:
+          # wrong codepage, text-mode newline conversion, topiary encoding bug).
+          $file = "tests\catala-format-unicode.catala_fr"
+          $formatted = catala-format $file
+          if ($LASTEXITCODE -ne 0) { throw "catala-format exited $LASTEXITCODE" }
+          $outBytes = [System.Text.Encoding]::UTF8.GetBytes(($formatted | Out-String))
+          $checks = @{
+            "e-acute (U+00E9)"     = [byte[]]@(0xC3, 0xA9)
+            "e-grave (U+00E8)"     = [byte[]]@(0xC3, 0xA8)
+            "c-cedilla (U+00E7)"   = [byte[]]@(0xC3, 0xA7)
+            "oe-ligature (U+0153)" = [byte[]]@(0xC5, 0x93)
+            "euro (U+20AC)"        = [byte[]]@(0xE2, 0x82, 0xAC)
+            "U-diaeresis (U+00DC)" = [byte[]]@(0xC3, 0x9C)
+          }
+          foreach ($kv in $checks.GetEnumerator()) {
+            $seq = $kv.Value; $found = $false
+            for ($i = 0; $i -le $outBytes.Length - $seq.Length; $i++) {
+              $m = $true
+              for ($j = 0; $j -lt $seq.Length; $j++) { if ($outBytes[$i+$j] -ne $seq[$j]) { $m=$false; break } }
+              if ($m) { $found = $true; break }
+            }
+            if (-not $found) { throw "Unicode char '$($kv.Key)' missing or corrupted in catala-format output" }
+          }
+          Write-Host "catala-format unicode roundtrip: OK ($($checks.Count) code points checked)"
+
+      - name: Clone catala-examples
+        run: git clone --depth=1 https://github.com/CatalaLang/catala-examples.git catala-examples
+
+      - name: clerk test (interpret, allocations_familiales)
+        working-directory: catala-examples
+        run: clerk test allocations_familiales
+
+      - name: clerk test (interpret, accented+spaced project dir)
+        run: |
+          $dst = "exemples accentu$([char]0x00E9)s"
+          robocopy catala-examples $dst /E /XD _build /NFL /NDL /NJH /NJS /NP | Out-Null
+          if ($LASTEXITCODE -ge 8) { throw "robocopy exited $LASTEXITCODE" }
+          Set-Location $dst
+          clerk test allocations_familiales
+          if ($LASTEXITCODE -ne 0) { throw "clerk test exited $LASTEXITCODE" }
+
+      - name: clerk test (ocaml backend, allocations_familiales)
+        working-directory: catala-examples
+        run: clerk test allocations_familiales --backend=ocaml
+
+      - name: clerk test (C backend, allocations_familiales) — expected to fail
+        # bundle has no C toolchain yet (linker gcc only); turns red when it does
+        working-directory: catala-examples
+        run: |
+          # GitHub's pwsh wrapper stops on a native non-zero exit before we can read it
+          $ErrorActionPreference = 'Continue'
+          $out = clerk test allocations_familiales --backend=c 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -eq 0) { throw "C backend now works: make this step gating" }
+          Write-Host "C backend failed as expected (exit $LASTEXITCODE)"
+          exit 0  # the wrapper otherwise exits with clerk's code
+
+      - name: clerk test (Java backend, allocations_familiales)
+        working-directory: catala-examples
+        run: clerk test allocations_familiales --backend=java
+
+      - name: clerk test (Python backend, allocations_familiales)
+        working-directory: catala-examples
+        run: clerk test allocations_familiales --backend=python
+
+      - name: clerk test (ocaml backend, impot_revenu)
+        working-directory: catala-examples
+        run: clerk test impot_revenu --backend=ocaml
+
+      - name: clerk test (ocaml backend, us_tax_code)
+        working-directory: catala-examples
+        run: clerk test us_tax_code --backend=ocaml
+
+      - name: clerk test (external OCaml module + count assertion)
+        working-directory: tests/ocaml_module
+        run: |
+          $out = clerk test --color=never 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "clerk test exited $LASTEXITCODE" }
+          # count assertion guards the Windows CRLF regression where clerk test
+          # exits 0 while counting 0/0/0.
+          # row label changes across clerk versions (tests/Tests/Interpreted): key on the counts
+          $m = [regex]::Match($out, '\w+\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s*%')
+          if (-not $m.Success) { throw "no test-count summary in clerk test output" }
+          $failed = [int]$m.Groups[1].Value; $passed = [int]$m.Groups[2].Value
+          if ($failed -ne 0 -or $passed -lt 2) {
+            throw "expected 0 failed / >=2 passed, got $failed failed / $passed passed"
+          }
+          Write-Host "external-module test OK: $passed passed, $failed failed"
+
+      - name: Uninstall MSI
+        run: |
+          # must match the install step
+          $base = if ('${{ matrix.install }}' -eq 'spaced') { "C:\Program Files\Catala accentu$([char]0x00E9)" } else { "C:\ProgramData\Catala" }
+          $msi = (Get-ChildItem bundle -Filter "catala-*.msi")[0]
+          $p = Start-Process msiexec.exe -Wait -PassThru `
+                 -ArgumentList "/x `"$($msi.FullName)`" /qn /norestart"
+          if ($p.ExitCode -ne 0) { throw "uninstall exited $($p.ExitCode)" }
+          if (Test-Path "$base\bin\catala.cmd") {
+            throw "Uninstall left files behind"
+          }
