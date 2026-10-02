@@ -271,6 +271,47 @@ jobs:
           }
           Write-Host "external-module test OK: $passed passed, $failed failed"
 
+      - name: Checkout catala-language-server (end-to-end tests)
+        uses: actions/checkout@v4
+        with:
+          repository: CatalaLang/catala-language-server
+          ref: ${{ inputs.catala_lsp_ref }}
+          path: lsp-e2e
+
+      - name: Set up Node.js (end-to-end tests)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: End-to-end tests (VS Code with the installed extension)
+        working-directory: lsp-e2e
+        run: |
+          # the bundled catala-language-server's tests, against the .vsix shipped in the MSI
+          $base = Split-Path (Split-Path (Get-Command catala.cmd).Source)
+          $vsix = (Get-ChildItem $base -Filter "catala-*.vsix" | Select-Object -First 1).FullName
+          if (-not $vsix) { throw "no catala-*.vsix in $base" }
+          $s = "$env:RUNNER_TEMP\extest"
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE) { throw "npm ci exited $LASTEXITCODE" }
+          npx tsc
+          if ($LASTEXITCODE) { throw "tsc exited $LASTEXITCODE" }
+          npx extest get-vscode -s $s
+          if ($LASTEXITCODE) { throw "get-vscode exited $LASTEXITCODE" }
+          npx extest get-chromedriver -s $s
+          if ($LASTEXITCODE) { throw "get-chromedriver exited $LASTEXITCODE" }
+          npx extest install-vsix -s $s -e "$s\extensions" -f $vsix
+          if ($LASTEXITCODE) { throw "install-vsix exited $LASTEXITCODE" }
+          npx extest run-tests "dist/e2e/*.js" -s $s -e "$s\extensions" --locale en
+          if ($LASTEXITCODE) { throw "end-to-end tests failed (exit $LASTEXITCODE)" }
+
+      - name: Upload end-to-end failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots-${{ matrix.install }}
+          path: ${{ runner.temp }}/extest/screenshots
+          if-no-files-found: ignore
+
       - name: Uninstall MSI
         run: |
           # must match the install step
