@@ -42,6 +42,6 @@ jobs:
 
       - name: Publish
         run: |
-          if [ "$TO" = release ]; then flags="--draft=false --prerelease=false"; else flags="--draft=false --prerelease"; fi
+          if [ "$TO" = release ]; then flags="--draft=false --prerelease=false --latest"; else flags="--draft=false --prerelease"; fi
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" $flags
           echo "$TAG is now a public $TO"
