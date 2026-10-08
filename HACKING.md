@@ -94,7 +94,7 @@ MSI is ever public. Flow: `docs/release-flow.dot` (`dot -Tsvg` to view).
 | Input | none | the catala-full version, `1.2.1` |
 | Name (tag and MSI) | `1.3.0-testing.20260925` (next version + day) | `1.2.1` |
 | Manual pass, on the public candidate | short | full (~2 h, metal box) |
-| Promoted to | candidate | candidate, then release (Latest) |
+| Promoted to | candidate | candidate, then release (Latest if newest) |
 
 1. Actions → **Testing build** or **Release build** → *Run workflow*. Resolves in the opam
    repository, builds, tests the MSI on a default and a spaced+accented install, stages a
@@ -107,7 +107,8 @@ MSI is ever public. Flow: `docs/release-flow.dot` (`dot -Tsvg` to view).
    version, uninstall, and records provenance in the notes. Still a draft.
 3. **Promote candidate** → `tag`, `to` = candidate: public pre-release. Test it by hand
    (the table below), let others test it. Bad: `gh release delete <tag> --yes --cleanup-tag`.
-4. **Release only**: **Promote candidate** → `to` = release. Same bytes, flagged Latest.
+4. **Release only**: **Promote candidate** → `to` = release. Same bytes, flagged Latest if
+   it is the newest version (a fix to an older line leaves Latest where it is).
 
 **Dev build**: three refs, `master` by default (a branch, a tag, a full SHA). Never touches
 the opam repository. Named `<ver>-dev.<date>`, kept 30 days as a CI artifact, never staged

@@ -1,7 +1,8 @@
 name: Promote candidate
 
 # Manual. Candidate: the verified draft goes public as a pre-release.
-# Release: the pre-release badge comes off (version tags only). Same bytes throughout.
+# Release: the pre-release badge comes off (version tags only), and it becomes Latest if it
+# is the newest version. Same bytes throughout.
 
 on:
   workflow_dispatch:
@@ -10,7 +11,7 @@ on:
         description: Candidate tag (1.3.0, or 1.4.0-testing.20260925)
         required: true
       to:
-        description: candidate = public pre-release for testers; release = flagged Latest (version tags only)
+        description: candidate = public pre-release for testers; release = full release, Latest if newest (version tags only)
         type: choice
         options: [candidate, release]
         default: candidate
@@ -42,6 +43,14 @@ jobs:
 
       - name: Publish
         run: |
-          if [ "$TO" = release ]; then flags="--draft=false --prerelease=false --latest"; else flags="--draft=false --prerelease"; fi
+          if [ "$TO" = release ]; then
+            # Latest only for the newest version: a fix to an older line must not take it.
+            newest=$( { gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts \
+                          --exclude-pre-releases --limit 100 --json tagName -q '.[].tagName'
+                        echo "$TAG"; } | sort -V | tail -1 )
+            if [ "$newest" = "$TAG" ]; then latest=--latest
+            else latest=--latest=false; echo "::notice::$TAG is older than $newest: Latest stays on $newest"; fi
+            flags="--draft=false --prerelease=false $latest"
+          else flags="--draft=false --prerelease"; fi
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" $flags
           echo "$TAG is now a public $TO"
