@@ -53,6 +53,12 @@ jobs:
           opam-local-packages: catala-src/catala.opam
           dune-cache: false
 
+      - name: Pin dune
+        # Same pin as catala's Woodpecker Windows CI: installing catala's
+        # cmdliner-support directories needs https://github.com/ocaml/dune/pull/16434,
+        # unreleased yet. Drop once a dune release has it.
+        run: opam pin -n dune "git+https://github.com/ocaml/dune#32130264771f677e0b7f65d55daf5230e0737d51"
+
       - name: Pre-install conf-pkg-config
         run: opam install conf-pkg-config
 
